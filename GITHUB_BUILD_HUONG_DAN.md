@@ -1,19 +1,21 @@
-# Bản v0.9: Actions xuất artifact `ChatHeoTracker-v0.9-recent-moves-compact-hud-apk`.
+# GitHub Actions — v1.1 Monte Carlo Strategy
 
-# Bản mới v0.8: file `.github/workflows/build-apk.yml` tạo artifact `ChatHeoTracker-v0.8-visibility-occlusion-warnings-apk`.
+1. Giải nén ZIP v1.1, tải **toàn bộ nội dung** lên repository GitHub; cần giữ `.github/workflows/build-apk.yml` đúng đường dẫn và **thay thế file cũ**, không lồng một thư mục mới.
+2. Vào **Actions** → **Build Chặt Heo Tracker APK** → **Run workflow**.
+3. GitHub lần lượt chạy kiểm thử Java, cài Android SDK và build. Khi tất cả đều xanh, tải artifact **ChatHeoTracker-v1.1-monte-carlo-preview-apk**.
+4. Giải nén artifact lấy `app-debug.apk`, cài thử trên Xiaomi 17 Pro Max. Nếu bị xung đột chữ ký, kiểm tra bạn đang cài trên app đã được ký khác; nên sao lưu dữ liệu trước khi gỡ bản cũ.
 
-# Chặt Heo Tracker v0.7 — build trên GitHub Actions
+## Cách dùng Gợi ý
 
-1. Giải nén ZIP v0.7, tải toàn bộ nội dung giải nén vào **gốc repository GitHub**. Giữ thư mục ẩn `.github` và file `.github/workflows/build-apk.yml`.
-2. Vào **Actions → Build Chặt Heo Tracker APK → Run workflow** (hoặc chờ workflow chạy sau khi push lên `main`/`master`).
-3. Nếu build thành công, tải artifact `ChatHeoTracker-v0.7-auto-reset-responsive-hud-apk` rồi giải nén để lấy `app-debug.apk`.
-4. Cài hoặc nâng cấp APK trên Android 16, cấp quyền hiển thị nổi và ghi **toàn bộ màn hình**.
+- Mở Tracker, nhập **toàn bộ bài còn trên tay hiện tại**, lưu lại.
+- Khi cần đè một bộ trên bàn, nhập lá tương ứng vào **Bài đang cần chặn**, lưu lại; để trống khi bạn được quyền mở lượt.
+- Quay về game, bấm **Gợi ý** cạnh ↻ góc trái. App chạy xử lý trên luồng nền, hiển thị tối đa 3 lựa chọn và tự ẩn sau 16 giây.
+- Có đủ 3 số đếm đối thủ khớp 52 lá mới chạy 192 mẫu chia bài; thiếu dữ liệu thì chỉ phân tích bài tay và cảnh báo **chưa mô phỏng**.
 
-## Khi sử dụng
+**Không có mô hình AI đã train trong ZIP**. Đây là baseline tìm nước kết hợp Monte Carlo; chưa có đánh giá xác suất thắng trên ván thật. Luật chặt và tiền phạt thực tế vẫn phải xác minh.
 
-- Nút nhỏ **↻** ở **góc trên trái** reset bài thủ công khi đang trong game; chỉ phần nút đó nhận chạm.
-- Tự reset: sau khi ván trước có số bài của ít nhất một đối thủ giảm, nếu cả ba đối thủ được đọc là **13 lá** liên tục trong **5 khung lấy mẫu** (khoảng 1,5 giây), app xóa dữ liệu ván cũ rồi tiếp tục ván mới.
-- Các ô P1 / P2 / P3 ẩn khi chưa thấy ai đánh; không thêm chữ Trên/Trái/Phải. Bảng **Bạn/khác** ẩn khi trống; bảng **Chưa đánh** luôn hiện và thu chiều ngang theo dữ liệu.
-- Bảng thông tin khác không nhận chạm; vùng nút Hủy/Đánh bên phải vẫn được để trống.
+Để train mô hình mạnh hơn, xem `AI_TRAINING_ROADMAP_VI.md`.
 
-**Lưu ý:** Đây là mã nguồn, chưa phải APK. Chưa chạy biên dịch hoặc thử thực tế trên Xiaomi. Bộ đếm 13 lá và tốc độ nhận diện vẫn có thể sai khi game có hiệu ứng hoặc màn hình bị che. Nếu workflow báo lỗi, lấy log của bước lỗi để kiểm tra.
+Lịch sử đối thủ: **lượt cũ bên trái → lượt mới bên phải**, mới nhất tô vàng, không ghi P1/P2/P3.
+
+**Trạng thái xây dựng:** Java tests chạy được trong môi trường hiện tại; chưa biên dịch APK ở đây vì thiếu Android SDK và không có kết nối Internet để tải SDK. Quy trình GitHub cần được chạy thực tế.

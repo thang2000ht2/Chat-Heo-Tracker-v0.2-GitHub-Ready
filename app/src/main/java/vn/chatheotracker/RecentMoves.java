@@ -2,78 +2,60 @@ package vn.chatheotracker;
 
 import java.util.*;
 
-/** Keeps whole plays in reverse chronological order. No rank sorting across plays. */
+/** Maintains the opponent's chronological play history (oldest on left). */
 final class RecentMoves {
-    private final ArrayList<LinkedHashSet<String>> newestFirst = new ArrayList<>();
+    private final ArrayList<LinkedHashSet<String>> chronological = new ArrayList<>();
 
     void record(Collection<String> cards) {
-        LinkedHashSet<String> unique = new LinkedHashSet<>();
-        for (String c : cards) if (isCard(c)) unique.add(c);
-        if (!unique.isEmpty()) newestFirst.add(0, unique);
+        LinkedHashSet<String> unique=new LinkedHashSet<>();
+        for(String c:cards)if(isCard(c))unique.add(c);
+        if(!unique.isEmpty())chronological.add(unique);
     }
-
-    void remove(String card) {
-        for (int i = newestFirst.size() - 1; i >= 0; i--) {
-            LinkedHashSet<String> move = newestFirst.get(i);
+    void remove(String card){
+        for(int i=chronological.size()-1;i>=0;i--){
+            LinkedHashSet<String> move=chronological.get(i);
             move.remove(card);
-            if (move.isEmpty()) newestFirst.remove(i);
+            if(move.isEmpty())chronological.remove(i);
         }
     }
-
-    void clear() { newestFirst.clear(); }
-    boolean isEmpty() { return newestFirst.isEmpty(); }
-    int size() { return newestFirst.size(); }
-
-    String mostRecent() {
-        return newestFirst.isEmpty() ? "" : formatMove(newestFirst.get(0));
-    }
-
-    String olderMoves() {
-        StringBuilder result = new StringBuilder();
-        for (int i = 1; i < newestFirst.size(); i++) {
-            if (result.length() > 0) result.append("  ›  ");
-            result.append(formatMove(newestFirst.get(i)));
+    void clear(){chronological.clear();}
+    boolean isEmpty(){return chronological.isEmpty();}
+    int size(){return chronological.size();}
+    String mostRecent(){return chronological.isEmpty()?"":formatMove(chronological.get(chronological.size()-1));}
+    String olderMoves(){
+        StringBuilder b=new StringBuilder();
+        for(int i=0;i<chronological.size()-1;i++){
+            if(b.length()>0)b.append("  ›  ");
+            b.append(formatMove(chronological.get(i)));
         }
-        return result.toString();
+        return b.toString();
     }
-
-    String fullText() {
-        if (newestFirst.isEmpty()) return "";
-        String older = olderMoves();
-        return mostRecent() + (older.isEmpty() ? "" : "  ›  " + older);
+    String fullText(){
+        String old=olderMoves(),latest=mostRecent();
+        return old.isEmpty()?latest:old+"  ›  "+latest;
     }
-
-    /** Group suits only within the same play; preserve order that cards were observed. */
-    private static String formatMove(Collection<String> cards) {
-        LinkedHashMap<String, LinkedHashSet<String>> byRank = new LinkedHashMap<>();
-        for (String card : cards) {
-            if (!isCard(card)) continue;
-            String rank = card.substring(0, card.length() - 1);
-            byRank.computeIfAbsent(rank, ignored -> new LinkedHashSet<>()).add(card.substring(card.length() - 1));
+    private static String formatMove(Collection<String> cards){
+        LinkedHashMap<String,LinkedHashSet<String>> ranks=new LinkedHashMap<>();
+        for(String card:cards){
+            if(!isCard(card))continue;
+            String r=card.substring(0,card.length()-1);
+            ranks.computeIfAbsent(r,k->new LinkedHashSet<>()).add(card.substring(card.length()-1));
         }
-        StringBuilder out = new StringBuilder();
-        for (Map.Entry<String, LinkedHashSet<String>> entry : byRank.entrySet()) {
-            if (out.length() > 0) out.append(' ');
+        StringBuilder out=new StringBuilder();
+        for(Map.Entry<String,LinkedHashSet<String>> entry:ranks.entrySet()){
+            if(out.length()>0)out.append(' ');
             out.append(entry.getKey());
-            for (String s : entry.getValue()) out.append(suitSymbol(s));
+            for(String s:entry.getValue())out.append(symbol(s));
         }
         return out.toString();
     }
-
-    private static boolean isCard(String s) {
-        if (s == null || s.length() < 2) return false;
-        String r = s.substring(0, s.length() - 1), suit = s.substring(s.length() - 1);
-        return Arrays.asList("3","4","5","6","7","8","9","10","J","Q","K","A","2").contains(r)
-                && Arrays.asList("S","C","D","H").contains(suit);
+    static boolean isCard(String c){
+        if(c==null||c.length()<2)return false;
+        String rank=c.substring(0,c.length()-1),suit=c.substring(c.length()-1);
+        return Arrays.asList("3","4","5","6","7","8","9","10","J","Q","K","A","2").contains(rank)
+            && Arrays.asList("S","C","D","H").contains(suit);
     }
-
-    private static String suitSymbol(String s) {
-        switch (s) {
-            case "S": return "♠";
-            case "C": return "♣";
-            case "D": return "♦";
-            case "H": return "♥";
-            default: return "?";
-        }
+    static String symbol(String s){
+        switch(s){case "S":return "♠";case "C":return "♣";case "D":return "♦";case "H":return "♥";default:return "?";}
     }
 }

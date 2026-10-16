@@ -43,8 +43,10 @@ public final class CaptureService extends Service {
     private final TextView[] playerRows=new TextView[3];
     private TextView otherRow, remainingRow, status;
     // Only this small top-left window accepts touches. Card HUD windows are pass-through.
-    private TextView resetButton;
-    private WindowManager.LayoutParams resetButtonParams;
+    private TextView resetButton, suggestButton, suggestionText;
+    private WindowManager.LayoutParams resetButtonParams, suggestButtonParams, suggestionPanelParams;
+    private View suggestionPanel;
+    private Runnable dismissSuggestion;
     private CardRecognizer recognizer;
     private CountRecognizer countRecognizer;
     private final Object stateLock=new Object();
@@ -312,6 +314,10 @@ public final class CaptureService extends Service {
         Arrays.fill(candidateFrames,0);Arrays.fill(missingCards,0);
         recentCards.clear();sawAnyLowerCounter=false;
         newDealStableFrames=0;
+        getSharedPreferences("tracker_strategy",MODE_PRIVATE).edit().remove("hand").remove("table").apply();
+        mainHandler.post(()->{
+            if(suggestionPanel!=null)suggestionPanel.setVisibility(View.GONE);
+        });
     }
     private void manualReset(){
         synchronized(stateLock){
@@ -402,6 +408,7 @@ public final class CaptureService extends Service {
             wm.addView(panels[i],params);
         }
         createResetButton();
+        createSuggestControls();
         refresh();
     }
     /** The top-left reset control is its own tiny touch target; HUD remains pass-through. */
@@ -428,6 +435,121 @@ public final class CaptureService extends Service {
         placeResetButton();
         wm.addView(resetButton,resetButtonParams);
     }
+    /** Small, opt-in suggestion button. It never taps or controls the game. */
+    private void createSuggestControls(){
+        suggestButton=new TextView(this);
+        suggestButton.setText("Gợi ý");
+        suggestButton.setContentDescription("Bấm để xem gợi ý chiến thuật");
+        suggestButton.setGravity(Gravity.CENTER);
+        suggestButton.setTextColor(0xffeafce8);
+        suggestButton.setTextSize(13f);
+        suggestButton.setTypeface(android.graphics.Typeface.DEFAULT,android.graphics.Typeface.BOLD);
+        android.graphics.drawable.GradientDrawable bg=new android.graphics.drawable.GradientDrawable();
+        bg.setColor(0xee204735);bg.setCornerRadius(dp(10));
+        bg.setStroke(dp(1),0xff9ad2a6);
+        suggestButton.setBackground(bg);
+        suggestButtonParams=new WindowManager.LayoutParams(dp(59),dp(42),
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                |WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                |WindowManager.LayoutParams.FLAG_SECURE,
+            PixelFormat.TRANSLUCENT);
+        suggestButtonParams.gravity=Gravity.TOP|Gravity.LEFT;
+        suggestButtonParams.alpha=.95f;
+        suggestButtonParams.x=dp(52);suggestButtonParams.y=dp(6);
+        suggestButton.setOnClickListener(v->onSuggestClick());
+        wm.addView(suggestButton,suggestButtonParams);
+
+        LinearLayout frame=newPanel();
+        frame.setPadding(dp(8),dp(6),dp(8),dp(6));
+        suggestionText=newCardText(14);
+        suggestionText.setTypeface(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD);
+        suggestionText.setTextColor(0xffffffff);
+        frame.addView(suggestionText);
+        suggestionPanel=frame;
+        suggestionPanel.setVisibility(View.GONE);
+        suggestionPanelParams=new WindowManager.LayoutParams(dp(345),
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                |WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                |WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                |WindowManager.LayoutParams.FLAG_SECURE,
+            PixelFormat.TRANSLUCENT);
+        suggestionPanelParams.gravity=Gravity.TOP|Gravity.LEFT;
+        suggestionPanelParams.alpha=.96f;
+        wm.addView(suggestionPanel,suggestionPanelParams);
+        placeSuggestionControls();
+        wm.updateViewLayout(suggestionPanel,suggestionPanelParams);
+    }
+    private void onSuggestClick(){
+        if(suggestionText==null||suggestionPanel==null)return;
+        String raw=getSharedPreferences("tracker_strategy",MODE_PRIVATE).getString("hand", "");
+        String tableRaw=getSharedPreferences("tracker_strategy",MODE_PRIVATE).getString("table", "");
+        StrategyAdvisor.Input parsed=StrategyAdvisor.parse(raw);
+        if(parsed.error!=null){
+            showAdvice(new MonteCarloAdvisor.Advice("Thiếu bài tay", "Mở Tracker để nhập các lá hiện còn trên tay."));
+            return;
+        }
+        StrategyAdvisor.Input table=tableRaw.trim().isEmpty()?null:StrategyAdvisor.parse(tableRaw);
+        if(table!=null&&table.error!=null){
+            showAdvice(new MonteCarloAdvisor.Advice("Sai bài cần chặn", "Mở Tracker để sửa ký hiệu bộ bài cần chặn."));
+            return;
+        }
+        final LinkedHashSet<String> actualHand=new LinkedHashSet<>(parsed.cards);
+        final LinkedHashSet<String> snapshotPlayed;
+        final int[] counts;
+        synchronized(stateLock){
+            snapshotPlayed=new LinkedHashSet<>(played);
+            counts=knownCounts.clone();
+        }
+        final Collection<String> lead=table==null?Collections.emptyList():new ArrayList<>(table.cards);
+        if(dismissSuggestion!=null)mainHandler.removeCallbacks(dismissSuggestion);
+        suggestionText.setText("Đang phân tích các nước đánh và bài chưa biết…");
+        suggestionPanel.setVisibility(View.VISIBLE);
+        suggestButton.setEnabled(false);
+        // Run the combinatorial enumeration and deal sampling off the UI thread.
+        if(workerHandler==null){
+            suggestButton.setEnabled(true);
+            showAdvice(new MonteCarloAdvisor.Advice("Chưa bật theo dõi", "Mở Tracker và cấp quyền ghi màn hình trước khi xem phân tích."));
+            return;
+        }
+        workerHandler.post(()->{
+            MonteCarloAdvisor.Advice advice;
+            try{
+                advice=MonteCarloAdvisor.advise(actualHand,lead,snapshotPlayed,counts);
+            }catch(Exception err){
+                android.util.Log.e("Tracker","Advisor failed",err);
+                advice=new MonteCarloAdvisor.Advice("Chưa thể phân tích", "Dữ liệu ván hoặc bài tay chưa phù hợp. Hãy kiểm tra lại.");
+            }
+            final MonteCarloAdvisor.Advice result=advice;
+            mainHandler.post(()->{
+                if(suggestButton!=null)suggestButton.setEnabled(true);
+                showAdvice(result);
+            });
+        });
+    }
+    private void showAdvice(MonteCarloAdvisor.Advice advice){
+        if(suggestionPanel==null||suggestionText==null)return;
+        suggestionText.setText(advice.title+"\n"+advice.detail);
+        if(dismissSuggestion!=null)mainHandler.removeCallbacks(dismissSuggestion);
+        suggestionPanel.setVisibility(View.VISIBLE);
+        dismissSuggestion=()->{if(suggestionPanel!=null)suggestionPanel.setVisibility(View.GONE);};
+        mainHandler.postDelayed(dismissSuggestion,16000);
+    }
+    private void placeSuggestionControls(){
+        if(wm==null)return;
+        android.util.DisplayMetrics dm=new android.util.DisplayMetrics();
+        wm.getDefaultDisplay().getRealMetrics(dm);
+        int screen=dm.widthPixels;
+        if(suggestButtonParams!=null){
+            suggestButtonParams.x=dp(52);suggestButtonParams.y=dp(6);
+        }
+        if(suggestionPanelParams!=null){
+            suggestionPanelParams.width=Math.max(dp(170),Math.min(dp(345),(int)(screen*.46f)));
+            suggestionPanelParams.x=dp(53);suggestionPanelParams.y=dp(54);
+        }
+    }
     private void placeResetButton(){
         if(resetButtonParams==null)return;
         resetButtonParams.x=dp(6);
@@ -442,6 +564,9 @@ public final class CaptureService extends Service {
             try{wm.updateViewLayout(resetButton,resetButtonParams);}
             catch(Exception ex){android.util.Log.w("Tracker","Relayout reset",ex);}
         }
+        placeSuggestionControls();
+        if(suggestButton!=null&&suggestButtonParams!=null)try{wm.updateViewLayout(suggestButton,suggestButtonParams);}catch(Exception ignored){}
+        if(suggestionPanel!=null&&suggestionPanelParams!=null)try{wm.updateViewLayout(suggestionPanel,suggestionPanelParams);}catch(Exception ignored){}
     }
     private void sizeOverlayFonts(int w,int h){
         float side=Math.min(w,h);
@@ -527,24 +652,24 @@ public final class CaptureService extends Service {
             updateOverlayLayout(metrics.widthPixels,metrics.heightPixels);
         }
     }
-    /** Newest play first (highlighted), older plays separated by ›. No rank ordering. */
+    /** Chronological history: oldest at left, newest at right (yellow). */
     private CharSequence recentPlaySpans(RecentMoves history){
         return recentPlaySpans(history, "");
     }
     private CharSequence recentPlaySpans(RecentMoves history,String prefix){
         SpannableStringBuilder sb=new SpannableStringBuilder(prefix);
+        String older=history.olderMoves();
+        if(!older.isEmpty()){
+            int start=sb.length();
+            sb.append(older).append("  ›  ");
+            sb.setSpan(new ForegroundColorSpan(0xffd8e4f3),start,sb.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        }
         String latest=history.mostRecent();
         int start=sb.length();
         sb.append(latest);
         if(!latest.isEmpty()){
             sb.setSpan(new ForegroundColorSpan(0xffffe699),start,sb.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
             sb.setSpan(new StyleSpan(android.graphics.Typeface.BOLD),start,sb.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-        }
-        String older=history.olderMoves();
-        if(!older.isEmpty()){
-            int oldStart=sb.length();
-            sb.append("  ›  ").append(older);
-            sb.setSpan(new ForegroundColorSpan(0xffd8e4f3),oldStart,sb.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         }
         return sb;
     }
@@ -631,6 +756,10 @@ public final class CaptureService extends Service {
         }
         if(wm!=null && resetButton!=null)try{wm.removeView(resetButton);}catch(Exception ignored){}
         resetButton=null;resetButtonParams=null;
+        if(dismissSuggestion!=null)mainHandler.removeCallbacks(dismissSuggestion);
+        if(wm!=null&&suggestButton!=null)try{wm.removeView(suggestButton);}catch(Exception ignored){}
+        if(wm!=null&&suggestionPanel!=null)try{wm.removeView(suggestionPanel);}catch(Exception ignored){}
+        suggestButton=null;suggestButtonParams=null; suggestionText=null;suggestionPanel=null;suggestionPanelParams=null;
         Arrays.fill(playerRows,null);
         otherRow=null;remainingRow=null;status=null;
         super.onDestroy();

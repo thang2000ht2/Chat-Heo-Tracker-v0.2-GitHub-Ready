@@ -17,6 +17,8 @@ import android.widget.ArrayAdapter;
 import android.widget.Spinner;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.widget.EditText;
+import android.text.InputType;
 
 public final class MainActivity extends Activity {
     private static final int REQUEST_CAPTURE = 101;
@@ -44,7 +46,34 @@ public final class MainActivity extends Activity {
             startService(it);
             state.setText("Đã yêu cầu làm mới bộ bài");
         }));
-        root.addView(text("Bố cục v0.9: không hiển thị chữ P1/P2/P3. Ba bảng bài theo vị trí người chơi, hai bảng trái/phải được chuyển lên cao.\n\nCác bộ vừa đánh hiển thị mới nhất trước, theo lượt và ngăn cách bằng ›. Lượt mới nhất màu vàng. Danh sách 'Chưa đánh' giữ thứ tự 3 đến 2 để tiện tìm và giữ cảnh báo tứ quý / đôi thông.\n\nNút ↻ ở góc trái cho phép đặt lại; ứng dụng vẫn tự phát hiện chia ván mới khi đủ điều kiện.",14,0xffdddddd));
+        root.addView(text("Lịch sử đối thủ: từ TRÁI sang PHẢI theo thời gian. Lượt mới nhất nằm bên phải, tô vàng. Không hiển thị nhãn P1/P2/P3.\n\nNút ↻ đặt lại bộ đếm. Nút Gợi ý chỉ phân tích khi bấm, không tự chọn hoặc đánh bài.",14,0xffdddddd));
+        root.addView(text("GỢI Ý MONTE CARLO (cần bài tay hiện tại):",17,Color.WHITE));
+        EditText hand=new EditText(this);
+        hand.setTextColor(Color.WHITE);hand.setHintTextColor(0xffa9b4c6);
+        hand.setHint("Ví dụ: 4♦ 6♠ 6♥ 7♣ 8♣ A♠ 2♥");
+        hand.setSingleLine(false);hand.setMinLines(2);
+        hand.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        hand.setText(getSharedPreferences("tracker_strategy",MODE_PRIVATE).getString("hand", ""));
+        root.addView(hand);
+        root.addView(text("Bài đang cần chặn (phải cập nhật theo bàn; bỏ trống = mở lượt):",14,0xffdddddd));
+        EditText table=new EditText(this);
+        table.setTextColor(Color.WHITE);table.setHintTextColor(0xffa9b4c6);
+        table.setHint("Ví dụ: 5♠ 5♦");
+        table.setText(getSharedPreferences("tracker_strategy",MODE_PRIVATE).getString("table", ""));
+        root.addView(table);
+        root.addView(button("Lưu bài tay / tình huống",()->{
+            StrategyAdvisor.Input handInput=StrategyAdvisor.parse(hand.getText().toString());
+            if(handInput.error!=null){state.setText(handInput.error);return;}
+            if(!table.getText().toString().trim().isEmpty()){
+                StrategyAdvisor.Input tableInput=StrategyAdvisor.parse(table.getText().toString());
+                if(tableInput.error!=null){state.setText("Bài cần chặn: "+tableInput.error);return;}
+            }
+            getSharedPreferences("tracker_strategy",MODE_PRIVATE).edit()
+                .putString("hand",hand.getText().toString().trim())
+                .putString("table",table.getText().toString().trim()).apply();
+            state.setText("Đã lưu. Vào game, bấm Gợi ý ở góc trái khi cần.");
+        }));
+        root.addView(text("Mỗi lần bấm Gợi ý, app tính cách đi hết bài với ít lượt nhất và (chỉ khi 3 bộ đếm hợp lệ) thử 192 cách phân chia bài úp. Cân bằng khả năng về trước với rủi ro bị chặt/mất quyền đánh bằng điểm ước lượng; không phải xác suất thắng hay mức tiền lời thực tế.\n\nBẮT BUỘC nhập CHÍNH XÁC những lá đang còn trên tay mỗi khi bài thay đổi. Nếu có lá chưa được Tracker ghi nhận, hãy bổ sung hoặc Reset khi ván mới.\n\nQuy tắc chặt heo và tiền phạt tùy phòng/game chưa được xác thực, app tránh khuyên nước chặt đặc biệt.",13,0xffbac4d2));
         root.addView(text("Quyền riêng tư: xử lý hình ảnh trên thiết bị, không truy cập Internet.\nĐể quét cả bàn, chọn 'Toàn bộ màn hình' khi cấp quyền ghi màn hình.",13,0xffbdbdbd));
         ScrollView outer=new ScrollView(this);outer.addView(root);setContentView(outer);
     }
