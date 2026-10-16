@@ -51,6 +51,13 @@ final class CardRecognizer {
         try { return detect(pic); }
         finally { if(pic!=input)pic.recycle(); }
     }
+    /** Only the active white-front layer. Gray historical cards must not be treated as the current lead. */
+    List<String> recognizeCurrentPlay(Bitmap input){
+        Bitmap pic=(input.getWidth()==REF_W && input.getHeight()==REF_H)?input:
+            Bitmap.createScaledBitmap(input,REF_W,REF_H,false);
+        try{return detectLayer(pic,false,545);}
+        finally{if(pic!=input)pic.recycle();}
+    }
     private List<String> detect(Bitmap b){
         // The game dims older plays to gray and presents the latest play in white.
         // Scanning white only silently loses older (still visible) cards in a stack.
@@ -59,8 +66,9 @@ final class CardRecognizer {
         cards.addAll(detectLayer(b,false));
         return new ArrayList<>(cards);
     }
-    private List<String> detectLayer(Bitmap b,boolean shaded){
-        int left=650,right=1400,top=shaded?295:300,bottom=shaded?420:650;
+    private List<String> detectLayer(Bitmap b,boolean shaded){return detectLayer(b,shaded,650);}
+    private List<String> detectLayer(Bitmap b,boolean shaded,int bottomLimit){
+        int left=650,right=1400,top=shaded?295:300,bottom=shaded?420:Math.min(650,bottomLimit);
         int y0=-1;
         for(int y=top;y<bottom;y+=2){
             int count=0;

@@ -21,7 +21,7 @@ final class MonteCarloAdvisor {
         final String kind;
         final int count;
         final boolean containsTwo;
-        Move(int bits,String k,int hi,int suit,boolean two){mask=bits;kind=k;highRank=hi;highSuit=suit;count=Integer.bitCount(bits);containsTwo=two;}
+        Move(int bits,String k,int hi,int suit,boolean two,int count){mask=bits;kind=k;highRank=hi;highSuit=suit;this.count=count;containsTwo=two;}
     }
     private static final class Choice {
         final Move move;
@@ -201,6 +201,128 @@ final class MonteCarloAdvisor {
         detail.append("\nKhông phải xác suất thắng; luật chặt đặc biệt và tiền phạt thực tế chưa xác nhận.");
         return new Advice("Gợi ý: "+render(choices.get(0).move),detail.toString());
     }
+    /** Risk of holding a response, NOT probability that the opponent chooses to respond.
+     * Returns only a short play suggestion so it does not obstruct the game.
+     * No advice is given when the 52-card conservation check fails.
+     */
+    static Advice adviseLowestBlockRisk(Collection<String> mine, Collection<String> table,
+                                        Collection<String> seen, int[] counts){
+        return adviseLowestBlockRisk(mine,table,seen,counts,StrategyMode.PLACEMENT);
+    }
+    static Advice adviseLowestBlockRisk(Collection<String> mine, Collection<String> table,
+                                        Collection<String> seen, int[] counts,StrategyMode mode){
+        if(mine==null || mine.isEmpty() || mine.size()>13 || new HashSet<>(mine).size()!=mine.size()
+                || !validCards(mine))return new Advice("QUÉT LẠI BÀI TAY","");
+        Set<String> common=new HashSet<>(mine);
+        if(seen!=null){common.retainAll(seen);if(!common.isEmpty())return new Advice("QUÉT LẠI BÀI TAY","");}
+        if(table!=null){common=new HashSet<>(mine);common.retainAll(table);
+            if(!common.isEmpty())return new Advice("QUÉT LẠI BÀI TAY","");}
+        MonteCarloAdvisor engine=new MonteCarloAdvisor(mine);
+        return engine.lowestBlockRisk(table,seen,counts,mode==null?StrategyMode.PLACEMENT:mode);
+    }
+
+    /** Returns [-1] when counters/history cannot support sampling. */
+    static double chopRisk(Collection<String> mine,Collection<String> seen,int[] counts){
+        if(mine==null||mine.isEmpty()||counts==null||counts.length!=3)return -1;
+        boolean hasTwo=false;
+        for(String c:mine)if(rank(c)==12)hasTwo=true;
+        if(!hasTwo)return -1;
+        ArrayList<String> hidden=hiddenCards(mine,seen,Collections.emptyList());
+        if(!validCountPartition(counts,hidden.size()))return -1;
+        int[] hits={0};
+        Random rnd=new Random(seed(mine,Collections.emptyList(),seen,counts)^0xB301L);
+        for(int t=0;t<DEALS;t++){
+            Collections.shuffle(hidden,rnd);
+            int offset=0;
+            boolean chop=false;
+            for(int p=0;p<3;p++){
+                int[] ranks=new int[13];
+                for(int j=0;j<counts[p];j++)ranks[rank(hidden.get(offset++))]++;
+                // Only the single-heo rule is presumed. The game's specific
+                // chopping/penalty rules have not been independently verified.
+                if(canChopSingleTwo(ranks))chop=true;
+            }
+            if(chop)hits[0]++;
+        }
+        return hits[0]/(double)DEALS;
+    }
+    private static boolean canChopSingleTwo(int[] ranks){
+        for(int n:ranks)if(n==4)return true;
+        return consecutive(ranks,2,3,-1);
+    }
+    private static ArrayList<String> hiddenCards(Collection<String> mine,Collection<String> seen,Collection<String> table){
+        HashSet<String> known=new HashSet<>(mine);
+        if(seen!=null)known.addAll(seen);
+        if(table!=null)known.addAll(table);
+        ArrayList<String> hidden=new ArrayList<>();
+        for(String r:RANKS)for(String suit:SUITS){String c=r+suit;if(!known.contains(c))hidden.add(c);}
+        return hidden;
+    }
+    private static boolean validCountPartition(int[] counts,int hidden){
+        if(counts==null||counts.length!=3)return false;
+        int total=0;
+        for(int n:counts){if(n<0||n>13)return false;total+=n;}
+        return total==hidden;
+    }
+    private Advice lowestBlockRisk(Collection<String> table,Collection<String> seen,int[] counts,StrategyMode mode){
+        Move lead=null;
+        if(table!=null&&!table.isEmpty()){
+            lead=classifyCards(table);
+            if(lead==null)return new Advice("QUÉT LẠI BÀI GIỮA BÀN","");
+        }
+        ArrayList<Choice> options=new ArrayList<>();
+        for(Move m:moves)if(lead==null||beats(m,lead))options.add(new Choice(m));
+        if(options.isEmpty())return new Advice("BỎ LƯỢT","");
+        ArrayList<String> hidden=hiddenCards(hand,seen,table);
+        if(!validCountPartition(counts,hidden.size()))
+            return new Advice("QUÉT LẠI BÀI VÀ LỊCH SỬ","");
+        int[] replies=new int[options.size()],chops=new int[options.size()];
+        Random random=new Random(seed(hand,table,seen,counts)^0x5809L);
+        for(int t=0;t<DEALS;t++){
+            Collections.shuffle(hidden,random);
+            int[][] opp=new int[3][13], suits=new int[3][13];
+            for(int p=0;p<3;p++)Arrays.fill(suits[p],-1);
+            int index=0;
+            for(int p=0;p<3;p++)for(int i=0;i<counts[p];i++){
+                String c=hidden.get(index++);int r=rank(c);
+                opp[p][r]++;suits[p][r]=Math.max(suits[p][r],suit(c));
+            }
+            for(int i=0;i<options.size();i++){
+                Move m=options.get(i).move;
+                boolean reply=false,chop=false;
+                for(int p=0;p<3;p++){
+                    if(counts[p]==0)continue;
+                    if(canReply(opp[p],suits[p],m))reply=true;
+                    if(m.containsTwo && canChopTwo(opp[p],m))chop=true;
+                }
+                if(reply)replies[i]++;
+                if(chop)chops[i]++;
+            }
+        }
+        int winner=-1;
+        double bestRisk=Double.POSITIVE_INFINITY;
+        int bestAfterTurns=99,bestShedding=-1;
+        for(int i=0;i<options.size();i++){
+            Move m=options.get(i).move;
+            // Chops matter in addition to conventional higher-card responses.
+            // Union is bounded conservatively because the same trial may have both.
+            double risk=(replies[i]+(m.containsTwo?chops[i]:0))/(double)DEALS;
+            risk=Math.min(1.0,risk);
+            int after=minTurns[((1<<hand.size())-1)^m.mask];
+            boolean tie=Math.abs(risk-bestRisk)<0.00001;
+            boolean betterTie=mode==StrategyMode.FIRST ? after<bestAfterTurns :
+                (m.count>bestShedding || (m.count==bestShedding && after<bestAfterTurns));
+            if(risk<bestRisk-0.00001 || (tie && betterTie)){
+                bestRisk=risk;winner=i;bestAfterTurns=after;bestShedding=m.count;
+            }
+        }
+        if(winner<0)return new Advice("QUÉT LẠI BÀI","");
+        Move best=options.get(winner).move;
+        int pct=(int)Math.round(bestRisk*100);
+        return new Advice("ĐÁNH "+render(best),
+            pct+"% mẫu đối thủ có thể chặn"+(best.containsTwo?"/chặt":""));
+    }
+
     private Move classifyMask(int mask){
         int[] byRank=new int[13];
         int high=-1,highestSuit=0,low=13;
@@ -224,12 +346,12 @@ final class MonteCarloAdvisor {
         for(int v:ranks){count+=v;if(v>0)unique++;if(v==2)groups2++;}
         if(unique==1){
             if(count>4)return null;
-            return new Move(mask,count==1?"single":count==2?"pair":count==3?"triple":"four",hi,highSuit,hi==12);
+            return new Move(mask,count==1?"single":count==2?"pair":count==3?"triple":"four",hi,highSuit,hi==12,count);
         }
         if(hi==12)return null; // 2 never belongs in a sequence
         if(hi-lo+1!=unique)return null;
-        if(count==unique && unique>=3)return new Move(mask,"straight",hi,highSuit,false);
-        if(groups2==unique && unique>=3)return new Move(mask,"pairs"+unique,hi,highSuit,false);
+        if(count==unique && unique>=3)return new Move(mask,"straight",hi,highSuit,false,count);
+        if(groups2==unique && unique>=3)return new Move(mask,"pairs"+unique,hi,highSuit,false,count);
         return null;
     }
     private static boolean beats(Move candidate,Move lead){

@@ -1,30 +1,32 @@
-# Chặt Heo Tracker v1.2 — nhận diện bài tay & Gợi ý 5 giây (bản thử nghiệm)
+# Chặt Heo Tracker v1.3 — Gợi ý nước khó bị chặn
 
-## Thay đổi chính
+Đây là **mã nguồn Android thử nghiệm**, chưa phải APK đã kiểm chứng trên Xiaomi. Cập nhật repository GitHub bằng toàn bộ nội dung ZIP và chạy workflow `Build Chặt Heo Tracker APK` trong GitHub Actions.
 
-- **Chế độ chơi lưu trong app:** `Xếp hạng 1–2–3–4` (mặc định) hoặc `Ưu tiên về nhất`. Các điểm số chỉ là **heuristic**, chưa có bảng tiền/phạt chính thức và không phải xác suất thắng.
-- **Tự đọc đủ 13 lá bài tay** trong quạt bài sau khi chia trên bố cục ngang 2048×942 được chuẩn hóa từ ảnh mẫu. Cần thấy đủ 13 lá, chất và số rõ ràng, cùng một kết quả ổn định qua **3 khung hình**. Không tự điền quân khi bị che, đang di chuyển hoặc chỉ còn một phần tay bài.
-- **Khu vực ngay trên bài của bạn:** riêng `Tôi (n)` hiển thị những lá đang cầm, `Khác` ghi bài đã đánh mà chưa xác định được người, `Chưa đánh` hiển thị các lá chưa ghi nhận ra bàn. Không trộn bài trên tay vào bài đã đánh.
-- Nếu bạn đánh một lá được nhận diện ở giữa bàn, ứng dụng **loại nó khỏi bài đang cầm**. Nhận diện sai/bỏ sót vẫn có thể khiến tay bài lệch; trước khi gợi ý, bạn nên đối chiếu dữ liệu.
-- Nút **Bài tay** ngay trên HUD cho phép sửa/quét lại thủ công mà không cần thoát game. Tay bài sửa thủ công được ưu tiên cho tới khi bắt đầu ván mới.
-- Nút **Gợi ý** chỉ hoạt động khi bạn bấm; khi có kết quả, popup **tự ẩn sau 5 giây**, không điều khiển hay chạm vào game.
-- Tự reset khi nhận đủ 13 lá của cả ba đối thủ trong nhiều khung hình sau khi ván trước có thay đổi, có nút ↻ reset thủ công.
-- Bài đối thủ được xếp lịch sử **cũ bên trái → mới bên phải**, không có nhãn P1/P2/P3.
-- Giữ cảnh báo màu đỏ khả năng tứ quý và xanh khả năng 3–4 đôi thông dựa trên những lá bài **không được xác định đang ở tay mình** và chưa thấy đánh.
+## Hành vi khi chơi
 
-## Hạn chế cần biết
+- **Chỉ khi nhấn Gợi ý:** quét lại nhiều khung hình của tay bài, quân đang trắng nổi ở giữa bàn, lịch sử còn hiện trên bàn và bộ đếm 3 đối thủ.
+- **Chỉ trả một quyết định:** `ĐÁNH <bài>` hoặc `BỎ LƯỢT`. Dòng thứ hai, nếu đủ dữ liệu: `X% mẫu đối thủ có thể chặn/chặt`.
+- **Nếu không khớp 52 lá:** chỉ hiện `QUÉT LẠI BÀI VÀ LỊCH SỬ`, không phỏng đoán. Nếu bài đang cầm chưa đọc rõ có thể dùng nút **Bài tay** để sửa.
+- **Cảnh báo heo tự động:** khi xác nhận nút **ĐÁNH** màu xanh của game qua hai khung hình, tay bạn có quân 2 và mẫu chia bài cho thấy có khả năng bị chặt (ngưỡng 5%), hiện cảnh báo 5 giây một lần cho lượt đó. Không tự chọn hay đánh bài.
+- **Lớp phủ Gợi ý tự ẩn sau 5 giây.** Các ô bài còn lại giữ nguyên bố cục cũ.
 
-1. **Chỉ nhận bài tay tự động khi toàn bộ quạt 13 lá xuất hiện rõ**, đúng giao diện/mức phóng to và bố cục mẫu. Nếu bắt đầu theo dõi muộn khi trên tay còn dưới 13 lá, cần bấm **Bài tay** để sửa.
-2. Quá trình nhận diện **được hiệu chỉnh trên vài ảnh và video do người dùng cung cấp**. Chưa có kiểm thử độc lập đủ lớn hoặc thử máy Xiaomi/Android 16 thực tế với phiên bản mới.
-3. Bộ chiến thuật hiện là **Monte Carlo 192 cách chia bài** (chỉ khi trạng thái bộ 52 lá nhất quán), kết hợp quy tắc và điểm ước lượng. **Chưa phải mô hình AI được huấn luyện**; không khẳng định kết quả thắng hoặc đúng luật phòng đặc thù.
-4. `Bài đang cần chặn` có thể cần nhập/sửa thủ công trong Tracker. Khi dữ liệu không rõ, ứng dụng không thể bảo đảm gợi ý hợp lệ.
-5. Tính năng hỗ trợ trong khi chơi có thể bị giới hạn bởi quy định của game. Ứng dụng chỉ đọc nội dung hiển thị khi bạn cấp quyền, không can thiệp vào game hoặc thực hiện lượt đánh.
+## Giới hạn phải biết
 
-## Cách build
+1. `X% mẫu có bài để chặn` là **tỷ lệ trên 192 cách chia bài ngẫu nhiên**, KHÔNG phải xác suất đối thủ thực sự chặn hoặc xác suất thua. Mô phỏng chưa mô hình hóa chính xác ý định và phong cách từng người chơi.
+2. Bộ so sánh chỉ hỗ trợ các bộ thông thường (đơn, đôi, ba, tứ quý, sảnh, đôi thông cùng loại); quy định chặt đặc biệt, luật hàng và mức phạt tiền của phòng Chặt Heo chưa được xác minh. **Không diễn giải số % như độ chính xác đã được kiểm định.**
+3. Nhận diện lượt dùng màu và vị trí nút **ĐÁNH** từ video đã gửi (khung hình chuẩn 2048×942); độ phân giải, hiệu ứng và giao diện khác có thể làm nhận diện thất bại. Khi chưa chắc chắn, app từ chối đưa lời khuyên.
+4. Quét lại lịch sử chỉ khôi phục được lá **đang nhìn thấy** trong các khung hình thu được. Không thể phục hồi chắc chắn lá đã biến mất hoàn toàn khỏi màn hình trước đó nếu bị bỏ sót. Khi dữ liệu không khớp, cần hiệu chỉnh thủ công hoặc bắt đầu lại từ ván mới.
+5. Nhận diện tay bài hiện dùng mẫu ảnh; một số kiểu xòe bài, lá bị chọn nhô cao, chat/icon che hoặc ảnh động có thể làm nhận diện thất bại. App không tự điền bài bị che.
 
-1. Tải đầy đủ thư mục gốc lên GitHub, bao gồm `.github/workflows/build-apk.yml`.
-2. Vào **Actions → Build Chặt Heo Tracker APK → Run workflow**.
-3. Chờ tất cả bước xanh rồi tải artifact `ChatHeoTracker-v1.2-auto-hand-ai-5s-apk`.
-4. Giải nén, cài `app-debug.apk` lên thiết bị và cấp quyền cửa sổ nổi, ghi màn hình.
+## Build trên GitHub
 
-**Tình trạng:** Kiểm thử Java phần chiến thuật, cảnh báo, lịch sử và xác nhận nhiều khung hình đã chạy. Có đối chiếu bộ nhận diện bài tay với các khung hình mẫu. Chưa biên dịch được APK trong môi trường này vì không có Android SDK hoặc kết nối tải SDK; cần chạy workflow để xác minh biên dịch Android.
+1. Giải nén nội dung ZIP vào nhánh `main` của repository, giữ thư mục `.github/workflows`.
+2. Mở **Actions → Build Chặt Heo Tracker APK → Run workflow**.
+3. Chờ bước kiểm thử Java và `Build debug APK`. Tải artifact `ChatHeoTracker-v1.3-lowest-block-risk-apk` chứa `app-debug.apk`.
+4. Cho phép quyền ghi màn hình và cửa sổ nổi trên Android. Nếu cài đè APK debug khác khóa ký, có thể cần gỡ bản cũ (dữ liệu cũ sẽ mất).
+
+## Trạng thái kiểm chứng
+
+- Kiểm thử Java về logic so quân, kiểm tra số bài, các lớp cảnh báo và thuật toán mô phỏng: đạt trong môi trường hiện tại.
+- Bộ phát hiện nút ĐÁNH màu xanh đã được thử trên ảnh trích từ video: khung 30s/55s nhận diện, khung 20s/60s không nhận.
+- **Chưa biên dịch Android APK và chưa thử trực tiếp trên thiết bị.** Nếu GitHub báo lỗi, cần xử lý theo log thực tế.

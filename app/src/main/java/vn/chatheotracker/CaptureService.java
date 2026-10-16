@@ -58,6 +58,21 @@ public final class CaptureService extends Service {
     private String handPending="";
     private int handPendingFrames=0;
     private boolean manualHandOverride=false;
+    // Fresh screenshot observations, never stale manual table text.
+    private List<String> currentBoard=Collections.emptyList();
+    private String boardCandidate="";
+    private int boardFrames=0;
+    private boolean boardStable=false;
+    private boolean myTurn=false;
+    private int turnFrames=0;
+    private boolean heoWarningIssued=false;
+    private boolean suggestRequested=false;
+    private int suggestionScanFrames=0;
+    private int lastVisualHandSize=-1;
+    private boolean visualHandTrusted=false;
+    private String visualCandidate="";
+    private int visualFrames=0;
+
 
     private final Object stateLock=new Object();
     private long lastScanned=0;
@@ -202,16 +217,34 @@ public final class CaptureService extends Service {
             Bitmap normalized=Bitmap.createScaledBitmap(cropped,2048,942,false);
             if(normalized!=cropped)cropped.recycle();
             List<String> cards=recognizer.recognize(normalized);
+            List<String> whiteCards=recognizer.recognizeCurrentPlay(normalized);
             int[] counts=countRecognizer.read(normalized);
-            // The local fan is a separate source from the center-table detector.
-            HandRecognizer.Result myCards=handRecognizer.recognizeFullHand(normalized);
+            boolean turnNow=LocalTurnDetector.isMyTurn(normalized);
+            // Read all visible card corners, even after part of the hand is spent.
+            HandRecognizer.Result myCards=handRecognizer.recognizeVisibleHand(normalized);
+            if(!myCards.complete)myCards=handRecognizer.recognizeFullHand(normalized);
             normalized.recycle();
-            boolean changed;
+            boolean changed,trySuggestion=false,tryWarning=false;
             synchronized(stateLock){
                 changed=handleFrame(cards,counts,now);
                 if(handleHandFrame(myCards))changed=true;
+                if(updateVisibleHand(myCards))changed=true;
+                updateBoard(whiteCards);
+                if(turnNow){turnFrames++;myTurn=turnFrames>=2;}
+                else{turnFrames=0;myTurn=false;heoWarningIssued=false;}
+                if(myTurn&&!heoWarningIssued && hasHeo(handCards) && conserved(handCards,played,knownCounts)){
+                    heoWarningIssued=true;tryWarning=true;
+                }
+                if(suggestRequested){
+                    suggestionScanFrames++;
+                    if(suggestionScanFrames>=5){
+                        suggestRequested=false;trySuggestion=true;
+                    }
+                }
             }
             if(changed)mainHandler.post(this::refresh);
+            if(tryWarning)warnHeoIfNecessary();
+            if(trySuggestion)runFreshAdvice();
         }catch(Exception e){android.util.Log.w("Tracker","Frame scan error",e);}
         finally {if(image!=null)image.close();}
     }
@@ -378,6 +411,10 @@ public final class CaptureService extends Service {
         played.clear();otherPlayed.clear();waitingCards.clear();cardMoves.clear();countDrops.clear();
         handCards.clear();myPlayed.clear();handPending="";handPendingFrames=0;
         manualHandOverride=false;
+        suggestRequested=false;suggestionScanFrames=0;
+        boardStable=false;boardCandidate="";boardFrames=0;currentBoard=Collections.emptyList();
+        myTurn=false;turnFrames=0;heoWarningIssued=false;
+        visualHandTrusted=false;visualCandidate="";visualFrames=0;lastVisualHandSize=-1;
         for(LinkedHashSet<String> cards:byPlayer)cards.clear();
         for(RecentMoves history:playerHistory)history.clear();
         otherHistory.clear();
@@ -691,60 +728,112 @@ public final class CaptureService extends Service {
         Toast.makeText(this,"Đã lưu "+sorted.size()+" lá. Bấm Gợi ý khi cần.",Toast.LENGTH_SHORT).show();
     }
 
+    /** User request starts a new read of hand, live board and count history.
+     * No stored text from an earlier table position is used for advice.
+     */
     private void onSuggestClick(){
-        if(suggestionText==null||suggestionPanel==null)return;
-        String raw=getSharedPreferences("tracker_strategy",MODE_PRIVATE).getString("hand", "");
-        String tableRaw=getSharedPreferences("tracker_strategy",MODE_PRIVATE).getString("table", "");
-        StrategyAdvisor.Input parsed=StrategyAdvisor.parse(raw);
-        if(parsed.error!=null){
-            showAdvice(new MonteCarloAdvisor.Advice("Thiếu bài tay", "Bấm Bài tay ở góc trái để chọn những lá đang cầm."));
-            toggleHandEditor();
-            return;
+        if(suggestionPanel==null||suggestionText==null)return;
+        synchronized(stateLock){suggestRequested=true;suggestionScanFrames=0;}
+        if(dismissSuggestion!=null)mainHandler.removeCallbacks(dismissSuggestion);
+        suggestionText.setText("ĐANG QUÉT BÀI…");
+        suggestionPanel.setVisibility(View.VISIBLE);
+    }
+    private void updateBoard(Collection<String> latest){
+        ArrayList<String> cards=new ArrayList<>(latest);
+        Collections.sort(cards);
+        String key=android.text.TextUtils.join(" ",cards);
+        if(key.equals(boardCandidate))boardFrames++;
+        else{boardCandidate=key;boardFrames=1;boardStable=false;}
+        if(boardFrames>=2){currentBoard=cards;boardStable=true;}
+    }
+    /** Only a complete and stable visible fan may repair a stale tracked hand.
+     * The previous full 13-card scan remains the default way to initialize a deal.
+     */
+    private boolean updateVisibleHand(HandRecognizer.Result r){
+        if(!r.complete || r.cards.isEmpty()){
+            visualHandTrusted=false;visualFrames=0;visualCandidate="";return false;
         }
-        StrategyAdvisor.Input table=tableRaw.trim().isEmpty()?null:StrategyAdvisor.parse(tableRaw);
-        if(table!=null&&table.error!=null){
-            showAdvice(new MonteCarloAdvisor.Advice("Sai bài cần chặn", "Mở Tracker để sửa ký hiệu bộ bài cần chặn."));
-            return;
-        }
-        final LinkedHashSet<String> actualHand=new LinkedHashSet<>(parsed.cards);
-        final LinkedHashSet<String> snapshotPlayed;
+        ArrayList<String> cards=new ArrayList<>(r.cards);Collections.sort(cards);
+        String key=android.text.TextUtils.join(" ",cards);
+        if(key.equals(visualCandidate))visualFrames++;
+        else{visualCandidate=key;visualFrames=1;visualHandTrusted=false;}
+        if(visualFrames<3)return false;
+        visualHandTrusted=true;lastVisualHandSize=cards.size();
+        LinkedHashSet<String> scanned=new LinkedHashSet<>(cards);
+        if(scanned.equals(handCards))return false;
+        // Never allow visible cards to conflict with known played cards.
+        for(String c:scanned)if(played.contains(c))return false;
+        if(!conserved(scanned,played,knownCounts))return false;
+        // A hand successfully conserved across all 52 known cards is stronger
+        // evidence than an older manual choice; reconcile without guessing.
+        handCards.clear();handCards.addAll(scanned);
+        manualHandOverride=false;
+        persistCurrentHand();
+        getSharedPreferences("tracker_strategy",MODE_PRIVATE).edit().putString("hand_source","auto").apply();
+        return true;
+    }
+    private static boolean conserved(Collection<String> hand,Collection<String> played,int[] counts){
+        return CardStateValidator.complete(hand,played,counts);
+    }
+    private static boolean hasHeo(Collection<String> hand){
+        for(String c:hand)if(c.startsWith("2"))return true;
+        return false;
+    }
+    /** Prompt after the live green ĐÁNH button is confirmed, once per turn.
+     * No risk claim is made when the unseen deck cannot be reconciled.
+     */
+    private void warnHeoIfNecessary(){
+        final LinkedHashSet<String> hand,seen;
         final int[] counts;
         synchronized(stateLock){
-            snapshotPlayed=new LinkedHashSet<>(played);
-            counts=knownCounts.clone();
+            if(!myTurn||!conserved(handCards,played,knownCounts))return;
+            hand=new LinkedHashSet<>(handCards);seen=new LinkedHashSet<>(played);counts=knownCounts.clone();
         }
-        final Collection<String> lead=table==null?Collections.emptyList():new ArrayList<>(table.cards);
-        final StrategyMode mode=StrategyMode.fromKey(
-            getSharedPreferences("tracker_strategy",MODE_PRIVATE)
-                .getString("mode",StrategyMode.PLACEMENT.key));
-        if(dismissSuggestion!=null)mainHandler.removeCallbacks(dismissSuggestion);
-        suggestionText.setText("Đang phân tích các nước đánh và bài chưa biết…");
-        suggestionPanel.setVisibility(View.VISIBLE);
-        suggestButton.setEnabled(false);
-        // Run the combinatorial enumeration and deal sampling off the UI thread.
-        if(workerHandler==null){
-            suggestButton.setEnabled(true);
-            showAdvice(new MonteCarloAdvisor.Advice("Chưa bật theo dõi", "Mở Tracker và cấp quyền ghi màn hình trước khi xem phân tích."));
-            return;
-        }
-        workerHandler.post(()->{
-            MonteCarloAdvisor.Advice advice;
-            try{
-                advice=MonteCarloAdvisor.advise(actualHand,lead,snapshotPlayed,counts,mode);
-            }catch(Exception err){
-                android.util.Log.e("Tracker","Advisor failed",err);
-                advice=new MonteCarloAdvisor.Advice("Chưa thể phân tích", "Dữ liệu ván hoặc bài tay chưa phù hợp. Hãy kiểm tra lại.");
-            }
-            final MonteCarloAdvisor.Advice result=advice;
+        double risk=MonteCarloAdvisor.chopRisk(hand,seen,counts);
+        if(risk>=0.05){
+            int percent=(int)Math.round(100*risk);
             mainHandler.post(()->{
-                if(suggestButton!=null)suggestButton.setEnabled(true);
-                showAdvice(result);
+                synchronized(stateLock){if(!myTurn)return;}
+                showAdvice(new MonteCarloAdvisor.Advice("⚠ CẨN THẬN CHẶT HEO",
+                    percent+"% mẫu có khả năng chặt quân 2"));
             });
-        });
+        }
+    }
+    private void runFreshAdvice(){
+        final LinkedHashSet<String> hand,seen;
+        final List<String> lead;
+        final int[] counts;
+        final boolean turn,boardOK,consistent,handOK;
+        synchronized(stateLock){
+            turn=myTurn;
+            boardOK=boardStable;
+            hand=new LinkedHashSet<>(handCards);
+            seen=new LinkedHashSet<>(played);
+            lead=new ArrayList<>(currentBoard);
+            counts=knownCounts.clone();
+            consistent=conserved(hand,seen,counts);
+            // Hand must either match the latest visible fan or have a trusted
+            // initial scan still consistent with the 52-card history.
+            handOK=!hand.isEmpty() && (visualHandTrusted ? lastVisualHandSize==hand.size() : !handPending.isEmpty()||manualHandOverride);
+        }
+        final MonteCarloAdvisor.Advice result;
+        if(!turn)result=new MonteCarloAdvisor.Advice("CHƯA ĐẾN LƯỢT","");
+        else if(!boardOK)result=new MonteCarloAdvisor.Advice("QUÉT LẠI BÀI GIỮA BÀN","");
+        else if(!handOK||!consistent)result=new MonteCarloAdvisor.Advice("QUÉT LẠI BÀI VÀ LỊCH SỬ","");
+        else {
+            StrategyMode mode=StrategyMode.fromKey(getSharedPreferences("tracker_strategy",MODE_PRIVATE)
+                .getString("mode",StrategyMode.PLACEMENT.key));
+            result=MonteCarloAdvisor.adviseLowestBlockRisk(hand,lead,seen,counts,mode);
+        }
+        mainHandler.post(()->showAdvice(result));
     }
     private void showAdvice(MonteCarloAdvisor.Advice advice){
         if(suggestionPanel==null||suggestionText==null)return;
-        suggestionText.setText(advice.title+"\n"+advice.detail);
+        String displayed=advice.title+(advice.detail.isEmpty()?"":"\n"+advice.detail);
+        suggestionText.setText(displayed);
+        suggestionText.setTextColor(advice.title.startsWith("⚠")?0xffff777b:
+            advice.title.startsWith("ĐÁNH")?0xffa6ffb6:
+            advice.title.startsWith("BỎ")?0xffffdf94:0xffffffff);
         if(dismissSuggestion!=null)mainHandler.removeCallbacks(dismissSuggestion);
         suggestionPanel.setVisibility(View.VISIBLE);
         dismissSuggestion=()->{if(suggestionPanel!=null)suggestionPanel.setVisibility(View.GONE);};

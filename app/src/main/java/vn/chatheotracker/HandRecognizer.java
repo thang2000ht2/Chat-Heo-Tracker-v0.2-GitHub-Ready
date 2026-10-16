@@ -74,6 +74,45 @@ final class HandRecognizer {
         }
         return new Result(cards,cards.size()==13);
     }
+    /** Re-scan a shorter, fully visible fan after cards have been played.
+     * Never infer cards hidden by animations: the detected fan length must match an
+     * integer card count and every corner must pass the original confidence gates.
+     */
+    Result recognizeVisibleHand(Bitmap b){
+        if(b.getWidth()!=2048||b.getHeight()!=942 || rankTemplates.size()!=13||suitTemplates.size()!=4)
+            return new Result(Collections.emptyList(),false);
+        int first=-1,bestLen=0,start=-1;
+        final int top=710,y=715;
+        for(int x=350;x<=1820;x++){
+            int v=b.getPixel(x,y);
+            boolean white=Color.red(v)>205&&Color.green(v)>205&&Color.blue(v)>205;
+            if(white&&start<0)start=x;
+            if((!white||x==1820)&&start>=0){
+                int end=white?x+1:x;
+                if(end-start>bestLen){first=start;bestLen=end-start;}
+                start=-1;
+            }
+        }
+        if(first<0||bestLen<140)return new Result(Collections.emptyList(),false);
+        int n=(int)Math.round((bestLen-160.0)/94.6)+1;
+        if(n<1||n>13 || Math.abs(bestLen-(160+(n-1)*94.6))>55)
+            return new Result(Collections.emptyList(),false);
+        int x0=first-3;
+        ArrayList<String> cards=new ArrayList<>();
+        for(int i=0;i<n;i++){
+            int x=x0+(int)Math.round(i*94.6);
+            boolean[][] r=extract(b,x+9,top+11,x+73,top+67,32,40,true);
+            boolean[][] t=extract(b,x+8,top+71,x+69,top+129,28,28,false);
+            if(r==null||t==null)return new Result(cards,false);
+            Match rr=classify(r,rankTemplates),ss=classify(t,suitTemplates);
+            if(rr.score<0.84||rr.margin<0.035||ss.score<0.89||ss.margin<0.018)
+                return new Result(cards,false);
+            String card=rr.label+ss.label;
+            if(cards.contains(card))return new Result(cards,false);
+            cards.add(card);
+        }
+        return new Result(cards,cards.size()==n);
+    }
     private static boolean ink(int a) {
         int r=Color.red(a),g=Color.green(a),b=Color.blue(a);
         return (r>90 && r>g*1.4 && r>b*1.4) || (r<120 && g<120 && b<120);
