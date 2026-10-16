@@ -1,3 +1,9 @@
+# Biên dịch Chặt Heo Tracker v0.6
+
+Tải toàn bộ nội dung ZIP lên repo GitHub (bao gồm thư mục ẩn `.github`). Vào Actions → Build Chặt Heo Tracker APK → Run workflow. Nếu build thành công, tải artifact `ChatHeoTracker-v0.6-compact-hud-apk`.
+
+**Kiểm tra khi cài bản mới:** góc phải phía trên bàn bài của bạn được chừa trống cho Hủy/Đánh; các nhãn overlay đều không nhận chạm. Nút làm mới ván nằm trong ứng dụng Tracker, không còn trên HUD.
+
 # Biên dịch Chặt Heo Tracker v0.4 bằng GitHub Actions
 
 Bộ mã nguồn đã có sẵn `.github/workflows/build-apk.yml`; không cần cài Android Studio, Gradle hay Android SDK trên máy của bạn.

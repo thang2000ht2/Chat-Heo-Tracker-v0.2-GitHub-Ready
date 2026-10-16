@@ -38,7 +38,13 @@ public final class MainActivity extends Activity {
             Intent it = new Intent(this,CaptureService.class);
             it.setAction(CaptureService.ACTION_STOP);startService(it);state.setText("Đã yêu cầu dừng");
         });root.addView(stop);
-        root.addView(text("Bố cục v0.5: P1 (trên), P2 (trái), P3 (phải) đặt dưới mỗi đối thủ.\nBạn/khác và CHƯA ĐÁNH nằm phía trên bài của bạn.\n\nCác lá tự xuống dòng, KHÔNG phải vuốt ngang. Đỏ = cả 4 lá cùng số chưa xuất hiện, chỉ là cảnh báo khả năng tứ quý.\n\nTự động phân biệt người đánh theo số bài giảm; lá chưa xác định được người sẽ nằm trong Bạn/khác. Có thể dùng Ván mới nếu bộ đếm chưa tự đặt lại.",14,0xffdddddd));
+        root.addView(button("Đặt lại khi bắt đầu ván mới", () -> {
+            Intent it=new Intent(this,CaptureService.class);
+            it.setAction(CaptureService.ACTION_RESET);
+            startService(it);
+            state.setText("Đã yêu cầu làm mới bộ bài");
+        }));
+        root.addView(text("Bố cục v0.6: P1 (trên), P2 (trái), P3 (phải) đặt dưới mỗi đối thủ.\nBạn/khác và CHƯA ĐÁNH nằm trong dải nhỏ phía trái–giữa, ngay trên tay bạn; vùng bên phải chừa cho Hủy/Đánh.\n\nCác bảng không nhận thao tác chạm và có thể bấm xuyên qua. Các chất cùng số được gộp gọn (ví dụ 7♠♣♦♥), tự xuống dòng, KHÔNG vuốt ngang. Đỏ = cả 4 lá cùng số chưa xuất hiện, chỉ là cảnh báo khả năng tứ quý.\n\nTự động phân biệt người đánh theo số bài giảm; lá chưa xác định được người sẽ nằm trong Bạn/khác. Có thể mở Tracker và bấm Đặt lại nếu bộ đếm chưa tự đặt lại.",14,0xffdddddd));
         root.addView(text("Quyền riêng tư: xử lý hình ảnh trên thiết bị, không truy cập Internet.\nĐể quét cả bàn, chọn 'Toàn bộ màn hình' khi cấp quyền ghi màn hình.",13,0xffbdbdbd));
         ScrollView outer=new ScrollView(this);outer.addView(root);setContentView(outer);
     }

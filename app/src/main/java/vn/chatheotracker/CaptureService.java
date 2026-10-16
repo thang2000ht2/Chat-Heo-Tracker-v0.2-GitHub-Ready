@@ -39,7 +39,7 @@ public final class CaptureService extends Service {
     private final WindowManager.LayoutParams[] panelParams=new WindowManager.LayoutParams[4];
     private final TextView[] playerRows=new TextView[3];
     private final TextView[] playerTitles=new TextView[3];
-    private TextView otherRow, remainingRow, remainingTitle, status;
+    private TextView otherRow, remainingRow, status;
     private CardRecognizer recognizer;
     private CountRecognizer countRecognizer;
     private final Object stateLock=new Object();
@@ -321,22 +321,15 @@ public final class CaptureService extends Service {
             layout.addView(playerRows[i]);
             panels[i]=layout;
         }
+        // Compact, non-interactive heads-up display. Group suits under each rank
+        // to show every unseen card without occupying the Play / Cancel buttons.
         LinearLayout bottom=newPanel();
-        LinearLayout bar=new LinearLayout(this);bar.setOrientation(LinearLayout.HORIZONTAL);
-        status=newCaption("Đã thấy 0/52 • Đỏ = 4 lá cùng số chưa xuất hiện");
-        status.setTextSize(9);
-        bar.addView(status,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1));
-        TextView reset=newCaption("Ván mới ↻");
-        reset.setPadding(dp(5),0,dp(2),0);
-        reset.setOnClickListener(v->{synchronized(stateLock){resetRoundInternal();}refresh();});
-        bar.addView(reset);
-        bottom.addView(bar);
-        bottom.addView(newCaption("Bạn / khác đã đánh"));
-        otherRow=newCardText(10.5f);
+        bottom.setPadding(dp(5),dp(2),dp(5),dp(2));
+        status=newCaption("Đã thấy 0/52  •  Đỏ: đủ 4 chất");
+        bottom.addView(status);
+        otherRow=newCardText(10f);
         bottom.addView(otherRow);
-        remainingTitle=newCaption("CHƯA ĐÁNH • 52 lá");
-        bottom.addView(remainingTitle);
-        remainingRow=newCardText(10.5f);
+        remainingRow=newCardText(10f);
         bottom.addView(remainingRow);
         panels[3]=bottom;
 
@@ -350,11 +343,14 @@ public final class CaptureService extends Service {
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                     |WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                    |WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
                     // Keep overlay text out of MediaProjection recognition frames.
-                    |WindowManager.LayoutParams.FLAG_SECURE
-                    |(i<3?WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE:0),
+                    |WindowManager.LayoutParams.FLAG_SECURE,
                 PixelFormat.TRANSLUCENT);
             params.gravity=Gravity.TOP|Gravity.LEFT;
+            // Android 12+ can block touches through opaque overlays from another UID.
+            // Use a non-touchable, sub-0.8 opacity window; also keep action zone empty.
+            params.alpha=0.70f;
             panelParams[i]=params;
             applyPosition(i,metrics.widthPixels,metrics.heightPixels);
             wm.addView(panels[i],params);
@@ -379,9 +375,8 @@ public final class CaptureService extends Service {
             if(playerRows[i]!=null)playerRows[i].setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(16f,side*.019f));
         }
         if(status!=null)status.setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(12f,side*.014f));
-        if(remainingTitle!=null)remainingTitle.setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(13f,side*.016f));
-        if(otherRow!=null)otherRow.setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(15f,side*.019f));
-        if(remainingRow!=null)remainingRow.setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(15f,side*.018f));
+        if(otherRow!=null)otherRow.setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(13.5f,side*.016f));
+        if(remainingRow!=null)remainingRow.setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(14.5f,side*.017f));
     }
     /** Positions are calibrated to the provided 2048x942 landscape game screen. */
     private void applyPosition(int i,int width,int height){
@@ -395,10 +390,10 @@ public final class CaptureService extends Service {
         }
         final float[][] zones={
             // width, left, top: beneath the counter/avatar, outside center-card scan zone.
-            {.30f,.350f,.255f},    // P1 under the top opponent
-            {.305f,.012f,.495f},   // P2 under the left opponent
-            {.305f,.683f,.495f},   // P3 under the right opponent
-            {.78f,.110f,.560f}     // own/unknown + all 52 just above local hand
+            {.30f,.350f,.255f},    // P1 below top opponent
+            {.295f,.010f,.480f},   // P2 below left opponent
+            {.295f,.700f,.480f},   // P3 below right opponent
+            {.580f,.015f,.610f}    // compact HUD, keep x > 60% open for Play/Cancel
         };
         p.width=Math.max(dp(120),(int)(width*zones[i][0]));
         p.x=(int)(width*zones[i][1]);
@@ -412,37 +407,35 @@ public final class CaptureService extends Service {
                 if(playerTitles[i]!=null)playerTitles[i].setText(names[i]+" ("+byPlayer[i].size()+")");
                 if(playerRows[i]!=null)playerRows[i].setText(renderSet(byPlayer[i]));
             }
-            otherRow.setText(renderSet(otherPlayed));
+            otherRow.setText("Bạn/khác ("+otherPlayed.size()+"): " + buildCompactRankGroups(otherPlayed));
             List<String> remaining=remainingCards();
-            remainingTitle.setText("CHƯA ĐÁNH ("+remaining.size()+"/52)");
             remainingRow.setText(buildRemainingSpans(remaining));
-            StringBuilder st=new StringBuilder("Đã thấy: ").append(played.size()).append("/52");
-            if(!waitingCards.isEmpty())st.append(" • Đang xác định: ").append(waitingCards.size());
+            StringBuilder st=new StringBuilder("Đã thấy ").append(played.size()).append("/52");
+            if(!waitingCards.isEmpty())st.append(" • Chờ: ").append(waitingCards.size());
             int missing=missingCards[0]+missingCards[1]+missingCards[2];
-            if(missing>0)st.append(" • Có thể bỏ sót: ").append(missing);
-            st.append(" • Đỏ: 4 lá cùng số chưa thấy");
+            if(missing>0)st.append(" • Thiếu?: ").append(missing);
+            st.append(" • Đỏ = đủ 4 chất");
             status.setText(st.toString());
         }
     }
-    /** Highlight a full rank only when ALL FOUR distinct suits remain unrecorded.
-     * This is a risk flag, NOT a claim that one opponent holds a four-of-a-kind.
+    /** Compact format: 3♠♣♦♥  4♠♣♦♥ ...; every symbol still represents a distinct card.
+     * Whole group is red when all 4 suits of that rank remain unseen.
      */
     private CharSequence buildRemainingSpans(Collection<String> remaining){
         HashSet<String> unseen=new HashSet<>(remaining);
         SpannableStringBuilder sb=new SpannableStringBuilder();
+        sb.append("Chưa đánh (").append(String.valueOf(remaining.size())).append("):  ");
         String[] ranks={"3","4","5","6","7","8","9","10","J","Q","K","A","2"};
         String[] suits={"S","C","D","H"};
         for(String rank:ranks){
             int count=0;
             for(String suit:suits)if(unseen.contains(rank+suit))count++;
             if(count==0)continue;
-            if(sb.length()>0)sb.append("   ");
+            if(sb.length()>0)sb.append("  ");
             int start=sb.length();
+            sb.append(rank);
             for(String suit:suits){
-                String card=rank+suit;
-                if(!unseen.contains(card))continue;
-                if(sb.length()>start)sb.append(" ");
-                sb.append(pretty(card));
+                if(unseen.contains(rank+suit))sb.append(suitSymbol(suit));
             }
             if(count==4){
                 sb.setSpan(new ForegroundColorSpan(0xffff5555),start,sb.length(),
@@ -450,6 +443,33 @@ public final class CaptureService extends Service {
             }
         }
         return sb;
+    }
+    private String buildCompactRankGroups(Collection<String> cards){
+        if(cards.isEmpty())return "-";
+        HashSet<String> owned=new HashSet<>(cards);
+        String[] ranks={"3","4","5","6","7","8","9","10","J","Q","K","A","2"};
+        String[] suits={"S","C","D","H"};
+        StringBuilder out=new StringBuilder();
+        for(String rank:ranks){
+            StringBuilder group=new StringBuilder(rank);
+            int n=0;
+            for(String suit:suits)if(owned.contains(rank+suit)){
+                group.append(suitSymbol(suit));n++;
+            }
+            if(n==0)continue;
+            if(out.length()>0)out.append("  ");
+            out.append(group);
+        }
+        return out.toString();
+    }
+    private static String suitSymbol(String s){
+        switch(s){
+            case "S": return "♠";
+            case "C": return "♣";
+            case "D": return "♦";
+            case "H": return "♥";
+            default: return "?";
+        }
     }
     private static String pretty(String s){
         if(s.isEmpty())return s;
@@ -511,7 +531,7 @@ public final class CaptureService extends Service {
             panels[i]=null;panelParams[i]=null;
         }
         Arrays.fill(playerRows,null);Arrays.fill(playerTitles,null);
-        otherRow=null;remainingRow=null;remainingTitle=null;status=null;
+        otherRow=null;remainingRow=null;status=null;
         super.onDestroy();
     }
     @Override public android.os.IBinder onBind(Intent i){return null;}

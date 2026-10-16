@@ -1,3 +1,30 @@
+# Chặt Heo Tracker v0.6 – Compact HUD (thử nghiệm)
+
+**Mục tiêu:** không che hai nút Hủy/Đánh bài hoặc cản thao tác khi chơi.
+
+- Giữ các ô P1/P2/P3 ở gần đối thủ, như v0.5.
+- Đưa **Bạn/khác** và **Chưa đánh** vào một HUD ngắn ở phía trái-trung tâm ngay phía trên tay bài (tọa độ game ngang: x ~1,5–59,5% chiều rộng, y ~61% chiều cao); phần bên phải từ 60% tới 100% được chừa trống để thao tác.
+- Thay `7♠ 7♣ 7♦ 7♥` thành **`7♠♣♦♥`**: vẫn thể hiện đủ từng lá nhưng chỉ lặp số một lần. Nếu đủ 4 chất chưa được ghi nhận đã đánh thì cả nhóm hiện **màu đỏ**.
+- Hiển thị toàn bộ các lá chưa đánh bằng cách tự xuống dòng; không vuốt ngang và không cắt sau 22 lá.
+- Tất cả overlay dùng `FLAG_NOT_TOUCHABLE` và `LayoutParams.alpha=0.70`, nên không có vùng chặn nhấn trên lớp phủ; đồng thời vẫn tránh đặt overlay trên vùng nút thao tác.
+- Nút **Đặt lại khi bắt đầu ván mới** ở trong màn hình chính của Tracker; không còn nút có thể bấm trên HUD.
+- Giữ chức năng đọc số lá và gán bài cho P1 (trên), P2 (trái), P3 (phải) của v0.4/v0.5.
+
+## Build trên GitHub
+
+1. Giải nén ZIP, đưa các tệp và thư mục vào gốc repo. Giữ nguyên `.github/workflows/build-apk.yml`.
+2. Mở tab Actions > **Build Chặt Heo Tracker APK** > **Run workflow**.
+3. Sau khi thành công, tải artifact `ChatHeoTracker-v0.6-compact-hud-apk` lấy `app-debug.apk` để cài.
+4. Đây là bản thử nghiệm. Chưa biên dịch APK hoặc thử chơi trực tiếp trên Xiaomi 17 Pro Max trong môi trường này.
+
+## Lưu ý
+
+- `Chưa đánh` nghĩa là những lá **chưa được ghi nhận đã đánh**: có thể vẫn nằm trên tay bạn hoặc đối thủ. Nếu nhận diện bỏ sót, dữ liệu còn sai.
+- Màu đỏ chỉ biểu thị chưa thấy lá nào của cùng số, không kết luận đối thủ có tứ quý.
+- Tọa độ tối ưu theo video/ảnh giao diện nằm ngang mà bạn gửi; nếu nút Đánh/Hủy ở vị trí khác trên một chế độ game, có thể cần điều chỉnh tiếp.
+
+---
+
 # Chặt Heo Tracker v0.5 — bố cục đầy đủ lá (bản thử nghiệm)
 
 ## Thay đổi từ v0.4
