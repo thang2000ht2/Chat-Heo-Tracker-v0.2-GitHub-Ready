@@ -1,3 +1,36 @@
+# Chặt Heo Tracker v0.4 — Tự nhận biết người vừa đánh
+
+## Cách hoạt động
+
+- P1 = người ngồi trên; P2 = người ngồi bên trái; P3 = người ngồi bên phải.
+- Khi số bài bên cạnh avatar giảm (ví dụ 13 -> 10), ứng dụng ghép thay đổi đó với 3 lá bài vừa xuất hiện giữa bàn.
+- Không bắt buộc chọn người đi đầu hoặc chuyển lượt P1/P2/P3 thủ công.
+- Sau khi người chơi ra hết bài, thẻ đếm có thể biến mất; bản này có thêm phát hiện về 0 khi số trước đó <= 3.
+- Hàng cuối cùng `Chưa đánh` = 52 trừ số lá được nhận diện là đã đánh. Nó bao gồm cả các lá còn trong tay chính bạn.
+- `Bạn/khác` ghi các lá đã xuất hiện mà không đối chiếu được với sự giảm số bài của một trong 3 đối thủ.
+- Các hàng sắp xếp rank tăng dần 3,4,5,6,7,8,9,10,J,Q,K,A,2; trong cùng rank là Bích, Chuồn, Rô, Cơ.
+- Các hàng có thể vuốt ngang để xem đủ số lá, không còn cắt sau 22 lá.
+
+## Hạn chế
+
+- Đây là bản thử nghiệm, không thể đảm bảo nhận đủ 52 lá hoặc gán chính xác 100% trên mọi thiết bị.
+- Template số 6 và 8 là ảnh mẫu gần đúng vì video tham chiếu không chứa hai số đó trong ô đếm.
+- Đầu ván cần thấy ít nhất 2 khung hình số bài của từng đối thủ để đặt mốc. Nếu bắt đầu ghi màn hình quá muộn, có thể không biết mốc ban đầu.
+- Nếu hai lượt diễn ra quá nhanh hoặc bài bị che, hiển thị `Bạn/khác` hoặc cảnh báo bỏ sót thay vì gán bừa.
+- Vẫn có nút `Ván mới` dự phòng; ván mới cũng được phát hiện tự động khi ba đối thủ cùng trở về 13 sau khi đã giảm.
+- Thuật toán đã được đối chiếu trên các khung hình tham chiếu của người dùng nhưng APK chưa được kiểm thử trên điện thoại thực tế trong môi trường này.
+
+## Build APK bằng GitHub Actions
+
+1. Giải nén ZIP và tải **nội dung** vào thư mục gốc repository, gồm `.github/workflows/build-apk.yml`, `app`, `build.gradle`, v.v.
+2. Mở tab Actions > Build Chặt Heo Tracker APK > Run workflow.
+3. Sau khi chạy thành công, tải Artifact `ChatHeoTracker-v0.4-auto-player-apk` chứa `app-debug.apk`.
+4. Cài thử trên Xiaomi Android 16 và cấp quyền hiển thị cửa sổ nổi, ghi màn hình (Toàn bộ màn hình).
+
+**Lưu ý:** Đây là mã nguồn, chưa phải APK đã biên dịch. Chưa xác nhận GitHub Actions biên dịch thành công cho phiên bản này.
+
+---
+
 # Chặt Heo Tracker v0.2 — mã nguồn thử nghiệm Android 16
 
 **Chưa phải APK đã biên dịch hoặc đã chạy thử trên điện thoại.** Đây là dự án Android Studio Java. Chưa kiểm thử trên Xiaomi 17 Pro Max chạy Android 16. Bản cũ 0.1 chỉ nhận lớp bài trắng; bản này thử cả các lớp bài màu xám và trắng ở giữa bàn.

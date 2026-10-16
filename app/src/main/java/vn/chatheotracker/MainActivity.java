@@ -38,22 +38,8 @@ public final class MainActivity extends Activity {
             Intent it = new Intent(this,CaptureService.class);
             it.setAction(CaptureService.ACTION_STOP);startService(it);state.setText("Đã yêu cầu dừng");
         });root.addView(stop);
-        root.addView(text("Sửa kết quả nhận diện nếu thiếu / sai:",16,Color.WHITE));
-        final String[] players={"P1","P2","P3"};
-        final String[] ranks={"3","4","5","6","7","8","9","10","J","Q","K","A","2"};
-        final String[] signs={"♠","♣","♦","♥"};
-        final String[] codes={"S","C","D","H"};
-        Spinner playerSelect=new Spinner(this), rankSelect=new Spinner(this), suitSelect=new Spinner(this);
-        playerSelect.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,players));
-        rankSelect.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,ranks));
-        suitSelect.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,signs));
-        root.addView(playerSelect);root.addView(rankSelect);root.addView(suitSelect);
-        root.addView(button("Chọn lượt tiếp theo",()->setPlayer(playerSelect.getSelectedItemPosition())));
-        root.addView(button("Thêm lá bị bỏ sót",()->modify(CaptureService.ACTION_ADD,
-            ranks[rankSelect.getSelectedItemPosition()]+codes[suitSelect.getSelectedItemPosition()],playerSelect.getSelectedItemPosition())));
-        root.addView(button("Gỡ lá nhận diện sai",()->modify(CaptureService.ACTION_REMOVE,
-            ranks[rankSelect.getSelectedItemPosition()]+codes[suitSelect.getSelectedItemPosition()],playerSelect.getSelectedItemPosition())));
-        root.addView(text("Quyền riêng tư: xử lý ảnh trên máy, không truy cập Internet và không tải ảnh lên máy chủ.\n\nĐể ghi đủ bàn chơi, chọn 'Toàn bộ màn hình' khi hệ thống hỏi. Trên Android 16 phải cấp lại quyền cho mỗi lần bật ghi màn hình.",13,0xffbdbdbd));
+        root.addView(text("Tự động phân biệt người đánh theo số bài giảm:\nP1 = người trên, P2 = người trái, P3 = người phải. Không phải chọn người đánh đầu tiên.\n\nCác lá không thể gán chắc chắn cho đối thủ sẽ nằm ở dòng Bạn/khác; không tự đoán sai người chơi.\n\nVuốt ngang từng hàng trong popup để xem hết 52 lá. Nút Ván mới vẫn có thể sử dụng nếu ứng dụng chưa tự phát hiện ván mới.",14,0xffdddddd));
+        root.addView(text("Quyền riêng tư: xử lý hình ảnh trên thiết bị, không truy cập Internet.\nĐể quét cả bàn, chọn 'Toàn bộ màn hình' khi cấp quyền ghi màn hình.",13,0xffbdbdbd));
         ScrollView outer=new ScrollView(this);outer.addView(root);setContentView(outer);
     }
     private TextView text(String val,int sp,int color) {
@@ -61,16 +47,6 @@ public final class MainActivity extends Activity {
     }
     private Button button(String label,Runnable action) {
         Button b=new Button(this);b.setText(label);b.setAllCaps(false);b.setOnClickListener(v->action.run());return b;
-    }
-    private void modify(String action,String card,int player) {
-        Intent it=new Intent(this,CaptureService.class);
-        it.setAction(action);it.putExtra(CaptureService.EXTRA_CARD,card);it.putExtra(CaptureService.EXTRA_PLAYER,player);startService(it);
-        state.setText("Đã gửi yêu cầu cập nhật " + card + " cho P" + (player+1));
-    }
-    private void setPlayer(int player){
-        Intent it=new Intent(this,CaptureService.class);
-        it.setAction(CaptureService.ACTION_SET_PLAYER);it.putExtra(CaptureService.EXTRA_PLAYER,player);startService(it);
-        state.setText("Lượt tiếp theo sẽ gán cho P" + (player+1));
     }
     private void startCapture() {
         if(!Settings.canDrawOverlays(this)) {state.setText("Cần cấp quyền hiển thị trên ứng dụng khác trước.");return;}

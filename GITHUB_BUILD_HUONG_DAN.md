@@ -1,4 +1,4 @@
-# Biên dịch Chặt Heo Tracker v0.2 bằng GitHub Actions
+# Biên dịch Chặt Heo Tracker v0.4 bằng GitHub Actions
 
 Bộ mã nguồn đã có sẵn `.github/workflows/build-apk.yml`; không cần cài Android Studio, Gradle hay Android SDK trên máy của bạn.
 
@@ -8,7 +8,7 @@ Bộ mã nguồn đã có sẵn `.github/workflows/build-apk.yml`; không cần 
 2. Vào https://github.com/new, tạo một repository mới (nên chọn **Private** nếu chỉ dùng cá nhân). Không cần tick README hay .gitignore khi tạo.
 3. Giải nén ZIP này trên máy tính. Vào thư mục `ChatHeoTracker_Source` và tải **toàn bộ nội dung bên trong thư mục** lên repository. Quan trọng: `app`, `build.gradle`, `settings.gradle` và `.github` phải ở ngay thư mục gốc của repo, **không nằm dưới thêm một thư mục `ChatHeoTracker_Source`**.
 4. Trong repository, mở **Actions**, nếu GitHub hỏi thì cho phép workflows. Chọn **Build Chặt Heo Tracker APK** → **Run workflow** (chọn nhánh main). Quy trình cũng chạy khi push lên main/master.
-5. Chờ tới khi thấy dấu tích xanh. Mở run vừa hoàn thành, cuộn xuống **Artifacts** → tải `ChatHeoTracker-v0.2-debug-apk`.
+5. Chờ tới khi thấy dấu tích xanh. Mở run vừa hoàn thành, cuộn xuống **Artifacts** → tải `ChatHeoTracker-v0.4-debug-apk`.
 6. Giải nén artifact để lấy `app-debug.apk`, chuyển sang Xiaomi và mở cài đặt.
 
 ## Nếu build báo lỗi
