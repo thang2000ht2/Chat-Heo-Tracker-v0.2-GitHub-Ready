@@ -4,7 +4,7 @@
 
 **Chưa có mạng nơ-ron được train.** Bản v1.1 gồm thuật toán phân rã bài chính xác (minimum-turn partition) và Monte Carlo sampling **192 bộ bài úp giả định** khi dữ liệu tổng hợp khớp 52 lá. Đây là bản **heuristic + mô phỏng nhanh**, không phải ISMCTS đầy đủ, không phải một agent đã đánh thắng người thật và cũng không đưa ra xác suất thắng đã kiểm định.
 
-Nút **Gợi ý** chỉ hoạt động khi người dùng bấm. App không chạm game, không chọn bài hộ, không đọc dữ liệu nội bộ game.
+Bản v1.4 tự gợi ý khi đến lượt (dựa vào nút ĐÁNH xuất hiện ổn định) và vẫn có nút Gợi ý để yêu cầu quét lại. Ứng dụng không chạm game, không chọn bài hộ, không đọc dữ liệu nội bộ game. Mô hình hành vi hiện là heuristic, chưa huấn luyện bằng dữ liệu ván thực tế.
 
 ## Mẹo và kiến trúc thực tế nên làm khi muốn training
 

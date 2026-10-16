@@ -18,6 +18,12 @@ final class RecentMoves {
             if(move.isEmpty())chronological.remove(i);
         }
     }
+    /** Detached immutable-looking snapshot for off-thread advice. */
+    List<List<String>> snapshot(){
+        ArrayList<List<String>> copy=new ArrayList<>();
+        for(Collection<String> move:chronological)copy.add(new ArrayList<>(move));
+        return copy;
+    }
     void clear(){chronological.clear();}
     boolean isEmpty(){return chronological.isEmpty();}
     int size(){return chronological.size();}

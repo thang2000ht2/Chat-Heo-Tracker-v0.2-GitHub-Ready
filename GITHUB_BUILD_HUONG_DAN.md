@@ -1,11 +1,9 @@
-# Biên dịch Chặt Heo Tracker v1.3 qua GitHub
+# Build v1.4 bằng GitHub Actions
 
-1. Giải nén ZIP, sao chép **toàn bộ** nội dung bên trong (kể cả thư mục `.github`) vào repository GitHub.
-2. Mở `.github/workflows/build-apk.yml` và kiểm tra workflow hiện phiên bản `v1.3-lowest-block-risk` / artifact mới.
-3. Vào **Actions → Build Chặt Heo Tracker APK → Run workflow**.
-4. Khi job màu xanh, mở **Artifacts**, tải `ChatHeoTracker-v1.3-lowest-block-risk-apk`.
-5. Giải nén artifact để lấy `app-debug.apk` và cài thử trên điện thoại Android 16.
+1. Xóa mã nguồn cũ hoặc cập nhật đè toàn bộ các file được thay đổi của v1.4 trong repository (giữ `.github/workflows/build-apk.yml`).
+2. Trong GitHub chọn **Actions → Build Chặt Heo Tracker APK → Run workflow**.
+3. Kiểm tra bước **Test all pure-Java rules, warnings, recognition evidence, suggestions**: phải chạy `TestOpponentBehavior` bên cạnh bảy bài test cũ.
+4. Khi job thành công, tải **ChatHeoTracker-v1.4-auto-behavior-advice-apk** từ mục Artifacts và giải nén lấy `app-debug.apk`.
+5. Trên Xiaomi cấp quyền **ghi màn hình** và **cửa sổ nổi**. Ứng dụng không tự chơi.
 
-Nếu Actions báo lỗi, chụp phần chữ đỏ và đoạn trước đó trong log. Không nên đổi hàng loạt phiên bản Gradle/SDK khi chưa rõ lỗi.
-
-**Giới hạn kiểm thử:** Các thuật toán Java độc lập đã qua kiểm thử tại đây. Chưa có Android SDK để biên dịch hoặc kiểm chứng APK thật; GitHub Actions mới là phép thử biên dịch Android. Nhận diện là cách khớp hình ảnh trên giao diện game mẫu, nên vẫn cần thử trong ván thật.
+Nếu job bị lỗi, gửi dòng lỗi đầu tiên từ bước bị đỏ, không chỉ ảnh chữ `Job failed`.

@@ -30,7 +30,7 @@ public final class MainActivity extends Activity {
         root.setPadding(36, 64, 36, 20); root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(Color.rgb(20,22,29));
         TextView title = text("CHẶT HEO TRACKER",24,Color.WHITE); root.addView(title);
-        root.addView(text("v1.3 • Gợi ý nước khó bị chặn nhất • Xiaomi / Android 16",15,0xffd0d0d0));
+        root.addView(text("v1.4 • Tự gợi ý khi đến lượt • Xiaomi / Android 16",15,0xffd0d0d0));
         state=text("Chưa theo dõi",16,0xffa5e8a3);root.addView(state);
         Button overlay = button("1. Cho phép cửa sổ nổi", () -> {
             Intent i = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
@@ -47,7 +47,7 @@ public final class MainActivity extends Activity {
             startService(it);
             state.setText("Đã yêu cầu làm mới bộ bài");
         }));
-        root.addView(text("Lịch sử đối thủ: từ TRÁI sang PHẢI theo thời gian. Lượt mới nhất nằm bên phải, tô vàng. Không hiển thị nhãn P1/P2/P3.\n\nNút ↻ đặt lại bộ đếm. Nút Gợi ý chỉ phân tích khi bấm, không tự chọn hoặc đánh bài.",14,0xffdddddd));
+        root.addView(text("Lịch sử đối thủ: từ TRÁI sang PHẢI theo thời gian. Lượt mới nhất nằm bên phải, tô vàng. Không hiển thị nhãn P1/P2/P3.\n\nNút ↻ đặt lại bộ đếm. Gợi ý tự hiện khi đến lượt; nút Gợi ý dùng để quét lại. Không tự chọn hoặc đánh bài.",14,0xffdddddd));
         root.addView(text("CHẾ ĐỘ CHƠI",17,Color.WHITE));
         Spinner gameMode=new Spinner(this);
         final String[] modes={StrategyMode.PLACEMENT.label,StrategyMode.FIRST.label};
@@ -80,9 +80,9 @@ public final class MainActivity extends Activity {
                 .putString("hand",hand.getText().toString().trim())
                 .putString("hand_source","manual")
                 .remove("table").apply();
-            state.setText("Đã lưu. Vào game, bấm Gợi ý ở góc trái khi cần.");
+            state.setText("Đã lưu. Khi đến lượt, gợi ý sẽ tự hiện.");
         }));
-        root.addView(text("Trong game: bấm Gợi ý để quét lại bài tay, bài mới trên bàn và bộ đếm. App chỉ hiện 1 nước đánh kèm tỷ lệ mẫu có thể chặn, rồi ẩn sau 5 giây. Khi nút ĐÁNH màu xanh xuất hiện và bài bạn có quân 2 với nguy cơ bị chặt, app cảnh báo một lần. Nếu dữ liệu không khớp, app yêu cầu quét lại thay vì khuyên bừa. Nút Bài tay dùng để sửa nếu tay bài bị che. Đây là tỷ lệ trong mô phỏng, không phải xác suất đối thủ sẽ thực sự chặn; luật chặt đặc biệt chưa được kiểm chứng toàn bộ.",13,0xffbac4d2));
+        root.addView(text("Khi nút ĐÁNH màu xanh xuất hiện ổn định, Tracker tự quét và gợi ý nước có mức chặn ước tính thấp nhất, kèm cảnh báo heo khi có rủi ro từ bài và lịch sử của ba đối thủ. Gợi ý tự ẩn sau 5 giây. Nếu bài chưa khớp 52 lá, Tracker sẽ quét lại và yêu cầu kiểm tra, không đoán bừa. Bạn có thể bấm Gợi ý để tính lại hoặc Bài tay để sửa. Phần trăm là mức ước tính từ mô hình hành vi, chưa phải xác suất đã được hiệu chuẩn.",13,0xffbac4d2));
         root.addView(text("Quyền riêng tư: xử lý hình ảnh trên thiết bị, không truy cập Internet.\nĐể quét cả bàn, chọn 'Toàn bộ màn hình' khi cấp quyền ghi màn hình.",13,0xffbdbdbd));
         ScrollView outer=new ScrollView(this);outer.addView(root);setContentView(outer);
     }

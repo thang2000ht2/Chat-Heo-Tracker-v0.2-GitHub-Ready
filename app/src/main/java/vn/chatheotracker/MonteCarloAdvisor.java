@@ -323,6 +323,134 @@ final class MonteCarloAdvisor {
             pct+"% mẫu đối thủ có thể chặn"+(best.containsTwo?"/chặt":""));
     }
 
+    /**
+     * Samples unseen hands, then estimates a *willingness* to answer rather than
+     * equating "holds a legal answer" to "will certainly use it".
+     * No trained weights: numbers are relative, heuristic risk indices.
+     * The visible move history is used only for verified played combinations;
+     * passes are not inferred from gaps in the recording.
+     */
+    static Advice adviseBehaviorAware(Collection<String> mine, Collection<String> table,
+                                       Collection<String> seen,int[] counts,
+                                       List<List<List<String>>> histories,StrategyMode mode){
+        if(mine==null||mine.isEmpty()||mine.size()>13 ||
+           mine.size()!=new HashSet<>(mine).size()||!validCards(mine))
+            return new Advice("QUÉT LẠI BÀI TAY","");
+        Set<String> overlap=new HashSet<>(mine);
+        if(seen!=null){overlap.retainAll(seen);if(!overlap.isEmpty())return new Advice("QUÉT LẠI BÀI TAY","");}
+        if(table!=null){overlap=new HashSet<>(mine);overlap.retainAll(table);
+            if(!overlap.isEmpty())return new Advice("QUÉT LẠI BÀI VÀ LỊCH SỬ","");}
+        MonteCarloAdvisor engine=new MonteCarloAdvisor(mine);
+        return engine.behaviorAware(table,seen,counts,histories,mode==null?StrategyMode.PLACEMENT:mode);
+    }
+    private Advice behaviorAware(Collection<String> table,Collection<String> seen,int[] counts,
+                                 List<List<List<String>>> histories,StrategyMode mode){
+        Move lead=null;
+        if(table!=null&&!table.isEmpty()){
+            lead=classifyCards(table);
+            if(lead==null)return new Advice("QUÉT LẠI BÀI GIỮA BÀN","");
+        }
+        ArrayList<Choice> options=new ArrayList<>();
+        for(Move m:moves)if(lead==null||beats(m,lead))options.add(new Choice(m));
+        if(options.isEmpty())return new Advice("BỎ LƯỢT","");
+        ArrayList<String> hidden=hiddenCards(hand,seen,table);
+        if(!validCountPartition(counts,hidden.size()))return new Advice("QUÉT LẠI BÀI VÀ LỊCH SỬ","");
+        OpponentBehaviorModel.Profile[] profiles=OpponentBehaviorModel.fromHistory(histories);
+        double[] answerTotals=new double[options.size()];
+        double[] chopTotals=new double[options.size()];
+        double heoChopTotal=0;
+        boolean myHeo=false;
+        for(String card:hand)if(rank(card)==12)myHeo=true;
+        Random random=new Random(seed(hand,table,seen,counts)^0xBADCA12L);
+        for(int trial=0;trial<DEALS;trial++){
+            Collections.shuffle(hidden,random);
+            ArrayList<List<String>> opponentHands=new ArrayList<>();
+            int[][] opp=new int[3][13],suits=new int[3][13];
+            for(int p=0;p<3;p++)Arrays.fill(suits[p],-1);
+            int offset=0;
+            for(int p=0;p<3;p++){
+                ArrayList<String> cards=new ArrayList<>();
+                for(int j=0;j<counts[p];j++){
+                    String card=hidden.get(offset++);
+                    cards.add(card);
+                    int r=rank(card);opp[p][r]++;
+                    suits[p][r]=Math.max(suits[p][r],suit(card));
+                }
+                opponentHands.add(cards);
+            }
+            double anyChopStay=1;
+            if(myHeo){
+                for(int p=0;p<3;p++)if(counts[p]>0&&canChopSingleTwo(opp[p])){
+                    anyChopStay*=1-OpponentBehaviorModel.chopWillingness(counts[p],profiles[p]);
+                }
+                heoChopTotal+=1-anyChopStay;
+            }
+            for(int i=0;i<options.size();i++){
+                Move m=options.get(i).move;
+                String playedSingle=m.kind.equals("single")?singleCardOf(m):null;
+                double noneRespond=1,noneChop=1;
+                for(int p=0;p<3;p++){
+                    if(counts[p]==0)continue;
+                    double willingness=0;
+                    if(canReply(opp[p],suits[p],m)){
+                        if(playedSingle!=null){
+                            willingness=OpponentBehaviorModel.singleReplyChance(
+                                opponentHands.get(p),playedSingle,counts[p],profiles[p]);
+                        }else{
+                            willingness=OpponentBehaviorModel.groupReplyChance(
+                                opp[p],m.kind,m.count,m.highRank,counts[p],profiles[p]);
+                        }
+                    }
+                    noneRespond*=1-willingness;
+                    if(m.containsTwo && canChopTwo(opp[p],m)){
+                        noneChop*=1-OpponentBehaviorModel.chopWillingness(counts[p],profiles[p]);
+                    }
+                }
+                double reply=1-noneRespond;
+                double chop=m.containsTwo?1-noneChop:0;
+                answerTotals[i]+=reply;
+                // Independent structural threats may overlap; combine by union bound proxy.
+                chopTotals[i]+=chop;
+            }
+        }
+        double best=Double.POSITIVE_INFINITY;
+        Choice selected=null;
+        int afterTurns=99,afterCards=-1;
+        for(int i=0;i<options.size();i++){
+            Choice c=options.get(i);
+            // Probabilistic union approximation, not a calibrated real win probability.
+            double reply=answerTotals[i]/DEALS, chop=chopTotals[i]/DEALS;
+            double risk=reply+(1-reply)*chop;
+            c.response=risk;
+            int remainingTurns=minTurns[((1<<hand.size())-1)^c.move.mask];
+            boolean tied=Math.abs(risk-best)<0.008; // 0.8 percentage-point tie tolerance
+            boolean betterTie=mode==StrategyMode.FIRST?
+                    remainingTurns<afterTurns:
+                    c.move.count>afterCards || (c.move.count==afterCards&&remainingTurns<afterTurns);
+            if(risk<best-0.008 || (tied&&betterTie)){
+                selected=c;best=risk;afterTurns=remainingTurns;afterCards=c.move.count;
+            }
+        }
+        if(selected==null)return new Advice("QUÉT LẠI BÀI","");
+        int pct=(int)Math.round(100*selected.response);
+        String title="ĐÁNH "+render(selected.move);
+        String detail="≈"+pct+"% mức chặn ước tính ("+DEALS+" mẫu)";
+        if(myHeo){
+            int danger=(int)Math.round(100*heoChopTotal/DEALS);
+            // Alert when plausible chopping hands exist, especially near endgame;
+            // estimate is about *attempting a heo play*, not every current move.
+            if(danger>=12){
+                detail+="\n⚠ HEO: rủi ro chặt ≈"+danger+"% nếu đánh 2";
+            }
+        }
+        return new Advice(title,detail);
+    }
+    private String singleCardOf(Move m){
+        if(!m.kind.equals("single"))return null;
+        for(int i=0;i<hand.size();i++)if((m.mask&(1<<i))!=0)return hand.get(i);
+        return null;
+    }
+
     private Move classifyMask(int mask){
         int[] byRank=new int[13];
         int high=-1,highestSuit=0,low=13;
