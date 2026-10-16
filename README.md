@@ -1,3 +1,27 @@
+# Chặt Heo Tracker v0.7 — Auto Reset & Responsive HUD
+
+Phiên bản này kế thừa v0.6 và thực hiện các yêu cầu về giao diện:
+
+- **Reset bài tại bàn:** nút ↻ 42dp ở **góc trên trái**, nằm trong một cửa sổ riêng có thể nhấn; các ô hiển thị dữ liệu vẫn bấm xuyên qua.
+- **Tự reset sau khi chia lại:** yêu cầu ván trước đã ghi nhận đối thủ giảm bài, sau đó cả ba ô P1/P2/P3 đều đọc là 13 trong ít nhất 5 khung hình lấy mẫu liên tiếp (~1,5 giây) để tránh reset do chuyển cảnh.
+- **Kích thước ô tự điều chỉnh:** rộng theo nội dung thực tế; giới hạn chiều ngang để tự xuống dòng. Bảng Chưa đánh được neo với mép dưới phía trên tay bài. Khi chưa có bài, các ô P1/P2/P3 ẩn; Bạn/khác ẩn nếu trống.
+- **Bỏ nhãn thừa:** chỉ còn P1, P2, P3, không viết Trên/Trái/Phải. Bỏ dòng tổng số đã thấy / giải thích màu đỏ; cảnh báo thiếu nhận diện chỉ hiển thị khi có vấn đề.
+- **Giữ đủ bài chưa đánh:** gộp chất theo số (vd `7♠♣♦♥`) và tô đỏ nhóm còn đủ bốn chất.
+- **Không cản nút Hủy/Đánh:** bảng phía dưới giới hạn trong 57,5% chiều ngang bên trái, không nhận chạm. Reset là ngoại lệ và chỉ chiếm đúng hình vuông 42dp ở góc trái.
+
+## Giới hạn
+
+- Tự reset chỉ hoạt động khi OCR nhận diện đủ ba số 13. Nếu một ô bị che hoặc bị đọc sai, hãy chạm ↻.
+- Reset chỉ xóa dữ liệu trong ứng dụng theo dõi, không tác động đến game gốc.
+- Đây là mã nguồn thử nghiệm, **chưa biên dịch/kiểm thử trên Xiaomi trong phiên làm việc này**. Độ chính xác nhận diện bài và người chơi vẫn có thể sai.
+- `Chưa đánh` có nghĩa là chưa **được bộ nhận diện ghi nhận đã đánh**, không đồng nghĩa chắc chắn vẫn nằm trong tay đối thủ.
+
+## Biên dịch
+
+Xem file `GITHUB_BUILD_HUONG_DAN.md`. Workflow nằm ở `.github/workflows/build-apk.yml`.
+
+---
+
 # Chặt Heo Tracker v0.6 – Compact HUD (thử nghiệm)
 
 **Mục tiêu:** không che hai nút Hủy/Đánh bài hoặc cản thao tác khi chơi.

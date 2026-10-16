@@ -38,8 +38,10 @@ public final class CaptureService extends Service {
     private final View[] panels=new View[4];
     private final WindowManager.LayoutParams[] panelParams=new WindowManager.LayoutParams[4];
     private final TextView[] playerRows=new TextView[3];
-    private final TextView[] playerTitles=new TextView[3];
     private TextView otherRow, remainingRow, status;
+    // Only this small top-left window accepts touches. Card HUD windows are pass-through.
+    private TextView resetButton;
+    private WindowManager.LayoutParams resetButtonParams;
     private CardRecognizer recognizer;
     private CountRecognizer countRecognizer;
     private final Object stateLock=new Object();
@@ -54,6 +56,8 @@ public final class CaptureService extends Service {
     private final int[] knownCounts={-1,-1,-1},lastCandidates={-1,-1,-1},candidateFrames={0,0,0};
     private final int[] missingCards={0,0,0};
     private boolean sawAnyLowerCounter=false;
+    private int newDealStableFrames=0;
+    private long ignoreCardsUntil=0L;
     private boolean stopping=false;
     private int densityDpi;
 
@@ -63,8 +67,8 @@ public final class CaptureService extends Service {
         String action=intent.getAction();
         if(ACTION_STOP.equals(action)){stopSelf();return START_NOT_STICKY;}
         if(ACTION_RESET.equals(action)){
-            synchronized(stateLock){resetRoundInternal();}
-            refresh();return START_NOT_STICKY;
+            manualReset();
+            return START_NOT_STICKY;
         }
         if(ACTION_ADD.equals(action)||ACTION_REMOVE.equals(action)){
             String c=intent.getStringExtra(EXTRA_CARD);
@@ -191,12 +195,32 @@ public final class CaptureService extends Service {
                 changed=true;
             }else if(before>=0 && count==13){changed=true;}
         }
-        if(sawAnyLowerCounter && allThirteen()){
-            resetRoundInternal();
+        // A redeal is recognized only after actual progress in the previous hand.
+        // Require all three freshly READ counters to be 13 for five successive
+        // sampled frames (~1.5s) to reject transition animations / OCR glitches.
+        boolean completeDeal=sawAnyLowerCounter && allThirteen();
+        if(completeDeal){
             for(int i=0;i<3;i++){
-                knownCounts[i]=13;lastCandidates[i]=13;candidateFrames[i]=2;
+                if(counts[i]!=13 || lastCandidates[i]!=13 || candidateFrames[i]<2){
+                    completeDeal=false;break;
+                }
             }
-            return true;
+        }
+        if(completeDeal){
+            newDealStableFrames++;
+            if(newDealStableFrames>=5){
+                resetRoundInternal();
+                for(int i=0;i<3;i++){
+                    knownCounts[i]=13;lastCandidates[i]=13;candidateFrames[i]=2;
+                }
+                // Ignore residual table cards while the new deal animates.
+                ignoreCardsUntil=now+1400;
+                return true;
+            }
+        }else newDealStableFrames=0;
+        if(now<ignoreCardsUntil){
+            pending="";pendingFrames=0;
+            return changed;
         }
         String signature=String.join(",",visible);
         if(!signature.isEmpty()){
@@ -267,6 +291,14 @@ public final class CaptureService extends Service {
         Arrays.fill(knownCounts,-1);Arrays.fill(lastCandidates,-1);
         Arrays.fill(candidateFrames,0);Arrays.fill(missingCards,0);
         pending="";pendingFrames=0;sawAnyLowerCounter=false;
+        newDealStableFrames=0;
+    }
+    private void manualReset(){
+        synchronized(stateLock){
+            resetRoundInternal();
+            ignoreCardsUntil=SystemClock.elapsedRealtime()+900;
+        }
+        refresh();
     }
     private static final class CardMove {
         final LinkedHashSet<String> cards;
@@ -312,30 +344,26 @@ public final class CaptureService extends Service {
     }
     private void createPanel(){
         if(wm==null)return;
-        String[] labels={"P1 • Trên", "P2 • Trái", "P3 • Phải"};
         for(int i=0;i<3;i++){
             LinearLayout layout=newPanel();
-            playerTitles[i]=newCaption(labels[i]);
-            playerRows[i]=newCardText(10.5f);
-            layout.addView(playerTitles[i]);
+            playerRows[i]=newCardText(11f);
             layout.addView(playerRows[i]);
+            layout.setVisibility(View.GONE); // Hide players with no detected plays.
             panels[i]=layout;
         }
-        // Compact, non-interactive heads-up display. Group suits under each rank
-        // to show every unseen card without occupying the Play / Cancel buttons.
+        // Keep only data-bearing rows. Unseen ranks already include the total count.
         LinearLayout bottom=newPanel();
-        bottom.setPadding(dp(5),dp(2),dp(5),dp(2));
-        status=newCaption("Đã thấy 0/52  •  Đỏ: đủ 4 chất");
-        bottom.addView(status);
+        bottom.setPadding(dp(5),dp(3),dp(5),dp(3));
         otherRow=newCardText(10f);
         bottom.addView(otherRow);
         remainingRow=newCardText(10f);
         bottom.addView(remainingRow);
+        status=newCaption("");
+        bottom.addView(status);
         panels[3]=bottom;
 
         android.util.DisplayMetrics metrics=new android.util.DisplayMetrics();
         wm.getDefaultDisplay().getRealMetrics(metrics);
-        // Start in current device orientation; game may rotate after permission dialog.
         sizeOverlayFonts(metrics.widthPixels,metrics.heightPixels);
         for(int i=0;i<panels.length;i++){
             WindowManager.LayoutParams params=new WindowManager.LayoutParams(
@@ -344,78 +372,135 @@ public final class CaptureService extends Service {
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                     |WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
                     |WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-                    // Keep overlay text out of MediaProjection recognition frames.
                     |WindowManager.LayoutParams.FLAG_SECURE,
                 PixelFormat.TRANSLUCENT);
             params.gravity=Gravity.TOP|Gravity.LEFT;
-            // Android 12+ can block touches through opaque overlays from another UID.
-            // Use a non-touchable, sub-0.8 opacity window; also keep action zone empty.
-            params.alpha=0.70f;
+            params.alpha=.70f;
             panelParams[i]=params;
-            applyPosition(i,metrics.widthPixels,metrics.heightPixels);
             wm.addView(panels[i],params);
         }
+        createResetButton();
         refresh();
+    }
+    /** The top-left reset control is its own tiny touch target; HUD remains pass-through. */
+    private void createResetButton(){
+        resetButton=new TextView(this);
+        resetButton.setText("↻");
+        resetButton.setContentDescription("Reset bài – bắt đầu ván mới");
+        resetButton.setGravity(Gravity.CENTER);
+        resetButton.setTextColor(0xffffffff);
+        resetButton.setTextSize(22f);
+        android.graphics.drawable.GradientDrawable bg=new android.graphics.drawable.GradientDrawable();
+        bg.setColor(0xdd222a36);bg.setCornerRadius(dp(12));
+        bg.setStroke(dp(1),0xffb9c2cd);
+        resetButton.setBackground(bg);
+        resetButton.setOnClickListener(v->manualReset());
+        resetButtonParams=new WindowManager.LayoutParams(dp(42),dp(42),
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                |WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                |WindowManager.LayoutParams.FLAG_SECURE,
+            PixelFormat.TRANSLUCENT);
+        resetButtonParams.gravity=Gravity.TOP|Gravity.LEFT;
+        resetButtonParams.alpha=.90f;
+        placeResetButton();
+        wm.addView(resetButton,resetButtonParams);
+    }
+    private void placeResetButton(){
+        if(resetButtonParams==null)return;
+        resetButtonParams.x=dp(6);
+        resetButtonParams.y=dp(6);
     }
     private void relayoutOverlays(int width,int height){
         if(wm==null||width<=0||height<=0)return;
         sizeOverlayFonts(width,height);
-        for(int i=0;i<panels.length;i++){
-            if(panels[i]==null||panelParams[i]==null)continue;
-            applyPosition(i,width,height);
-            try{wm.updateViewLayout(panels[i],panelParams[i]);}
-            catch(Exception ex){android.util.Log.w("Tracker","Relayout overlay",ex);}
+        updateOverlayLayout(width,height);
+        if(resetButton!=null && resetButtonParams!=null){
+            placeResetButton();
+            try{wm.updateViewLayout(resetButton,resetButtonParams);}
+            catch(Exception ex){android.util.Log.w("Tracker","Relayout reset",ex);}
         }
     }
-    /** Pixel-based fonts scale with the game canvas, not a phone's dp density. */
     private void sizeOverlayFonts(int w,int h){
         float side=Math.min(w,h);
         for(int i=0;i<3;i++){
-            if(playerTitles[i]!=null)playerTitles[i].setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(14f,side*.016f));
-            if(playerRows[i]!=null)playerRows[i].setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(16f,side*.019f));
+            if(playerRows[i]!=null)playerRows[i].setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(16f,side*.018f));
         }
-        if(status!=null)status.setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(12f,side*.014f));
-        if(otherRow!=null)otherRow.setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(13.5f,side*.016f));
-        if(remainingRow!=null)remainingRow.setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(14.5f,side*.017f));
+        if(status!=null)status.setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(11f,side*.014f));
+        if(otherRow!=null)otherRow.setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(13f,side*.015f));
+        if(remainingRow!=null)remainingRow.setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(14f,side*.016f));
     }
-    /** Positions are calibrated to the provided 2048x942 landscape game screen. */
-    private void applyPosition(int i,int width,int height){
-        WindowManager.LayoutParams p=panelParams[i];
-        if(p==null)return;
-        if(width<height){
-            // Portrait fallback while permission/dialog/activity is still visible.
-            p.width=(int)(width*.96f);p.x=(int)(width*.02f);
-            p.y=(int)(height*(.12f+i*.15f));
-            return;
+    private int desiredWidth(TextView text){
+        if(text==null||text.getVisibility()!=View.VISIBLE)return 0;
+        return (int)Math.ceil(text.getPaint().measureText(text.getText().toString()));
+    }
+    /** Width follows visible text. Height grows/shrinks after wrapping, without a scroll view. */
+    private void updateOverlayLayout(int width,int height){
+        if(wm==null)return;
+        boolean landscape=width>=height;
+        for(int i=0;i<panels.length;i++){
+            View v=panels[i];WindowManager.LayoutParams p=panelParams[i];
+            if(v==null||p==null)continue;
+            int maxWidth=landscape?(int)(width*(i==3?.575f:.285f)):(int)(width*.94f);
+            int minWidth=(i==3)?dp(114):dp(40);
+            int needed;
+            if(i<3)needed=desiredWidth(playerRows[i]);
+            else needed=Math.max(desiredWidth(remainingRow),Math.max(desiredWidth(otherRow),desiredWidth(status)));
+            // The reset control occupies its own window, not HUD content.
+            p.width=Math.min(maxWidth,Math.max(minWidth,needed+dp(20)));
+            p.height=WindowManager.LayoutParams.WRAP_CONTENT;
+            if(landscape){
+                if(i==0){p.x=(width-p.width)/2;p.y=(int)(height*.255f);}
+                else if(i==1){p.x=(int)(width*.012f);p.y=(int)(height*.485f);}
+                else if(i==2){p.x=width-p.width-(int)(width*.012f);p.y=(int)(height*.485f);}
+                else{
+                    p.x=(int)(width*.014f);
+                    // Measure actual wrapped text: bottom edge stays ABOVE the hand.
+                    int measureW=View.MeasureSpec.makeMeasureSpec(p.width,View.MeasureSpec.EXACTLY);
+                    int measureH=View.MeasureSpec.makeMeasureSpec((int)(height*.36f),View.MeasureSpec.AT_MOST);
+                    v.measure(measureW,measureH);
+                    p.y=Math.max((int)(height*.35f),(int)(height*.657f)-v.getMeasuredHeight());
+                }
+            }else{
+                p.x=(int)(width*.03f);
+                p.y=(int)(height*(.12f+i*.16f));
+            }
+            try{wm.updateViewLayout(v,p);}
+            catch(Exception ex){android.util.Log.w("Tracker","Relayout HUD "+i,ex);}
         }
-        final float[][] zones={
-            // width, left, top: beneath the counter/avatar, outside center-card scan zone.
-            {.30f,.350f,.255f},    // P1 below top opponent
-            {.295f,.010f,.480f},   // P2 below left opponent
-            {.295f,.700f,.480f},   // P3 below right opponent
-            {.580f,.015f,.610f}    // compact HUD, keep x > 60% open for Play/Cancel
-        };
-        p.width=Math.max(dp(120),(int)(width*zones[i][0]));
-        p.x=(int)(width*zones[i][1]);
-        p.y=(int)(height*zones[i][2]);
     }
     private void refresh(){
         if(remainingRow==null)return;
         synchronized(stateLock){
-            String[] names={"P1 • Trên", "P2 • Trái", "P3 • Phải"};
             for(int i=0;i<3;i++){
-                if(playerTitles[i]!=null)playerTitles[i].setText(names[i]+" ("+byPlayer[i].size()+")");
-                if(playerRows[i]!=null)playerRows[i].setText(renderSet(byPlayer[i]));
+                int n=byPlayer[i].size();
+                View p=panels[i];
+                if(playerRows[i]!=null)playerRows[i].setText("P"+(i+1)+"  "+buildCompactRankGroups(byPlayer[i]));
+                if(p!=null)p.setVisibility(n>0?View.VISIBLE:View.GONE);
             }
-            otherRow.setText("Bạn/khác ("+otherPlayed.size()+"): " + buildCompactRankGroups(otherPlayed));
+            if(otherPlayed.isEmpty())otherRow.setVisibility(View.GONE);
+            else{
+                otherRow.setVisibility(View.VISIBLE);
+                otherRow.setText("Bạn/khác  "+buildCompactRankGroups(otherPlayed));
+            }
             List<String> remaining=remainingCards();
             remainingRow.setText(buildRemainingSpans(remaining));
-            StringBuilder st=new StringBuilder("Đã thấy ").append(played.size()).append("/52");
-            if(!waitingCards.isEmpty())st.append(" • Chờ: ").append(waitingCards.size());
             int missing=missingCards[0]+missingCards[1]+missingCards[2];
-            if(missing>0)st.append(" • Thiếu?: ").append(missing);
-            st.append(" • Đỏ = đủ 4 chất");
-            status.setText(st.toString());
+            if(missing>0 || !waitingCards.isEmpty()){
+                StringBuilder info=new StringBuilder();
+                if(missing>0)info.append("Thiếu nhận diện: ").append(missing);
+                if(!waitingCards.isEmpty()){
+                    if(info.length()>0)info.append(" · ");
+                    info.append("Đang ghép: ").append(waitingCards.size());
+                }
+                status.setVisibility(View.VISIBLE);
+                status.setText(info.toString());
+            }else status.setVisibility(View.GONE);
+        }
+        android.util.DisplayMetrics metrics=new android.util.DisplayMetrics();
+        if(wm!=null){
+            wm.getDefaultDisplay().getRealMetrics(metrics);
+            updateOverlayLayout(metrics.widthPixels,metrics.heightPixels);
         }
     }
     /** Compact format: 3♠♣♦♥  4♠♣♦♥ ...; every symbol still represents a distinct card.
@@ -424,7 +509,7 @@ public final class CaptureService extends Service {
     private CharSequence buildRemainingSpans(Collection<String> remaining){
         HashSet<String> unseen=new HashSet<>(remaining);
         SpannableStringBuilder sb=new SpannableStringBuilder();
-        sb.append("Chưa đánh (").append(String.valueOf(remaining.size())).append("):  ");
+        sb.append("Chưa đánh (").append(String.valueOf(remaining.size())).append("): ");
         String[] ranks={"3","4","5","6","7","8","9","10","J","Q","K","A","2"};
         String[] suits={"S","C","D","H"};
         for(String rank:ranks){
@@ -530,7 +615,9 @@ public final class CaptureService extends Service {
             if(panels[i]!=null)try{wm.removeView(panels[i]);}catch(Exception ignored){}
             panels[i]=null;panelParams[i]=null;
         }
-        Arrays.fill(playerRows,null);Arrays.fill(playerTitles,null);
+        if(wm!=null && resetButton!=null)try{wm.removeView(resetButton);}catch(Exception ignored){}
+        resetButton=null;resetButtonParams=null;
+        Arrays.fill(playerRows,null);
         otherRow=null;remainingRow=null;status=null;
         super.onDestroy();
     }

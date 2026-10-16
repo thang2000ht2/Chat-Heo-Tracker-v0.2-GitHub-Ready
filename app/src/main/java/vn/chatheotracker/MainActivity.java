@@ -44,7 +44,7 @@ public final class MainActivity extends Activity {
             startService(it);
             state.setText("Đã yêu cầu làm mới bộ bài");
         }));
-        root.addView(text("Bố cục v0.6: P1 (trên), P2 (trái), P3 (phải) đặt dưới mỗi đối thủ.\nBạn/khác và CHƯA ĐÁNH nằm trong dải nhỏ phía trái–giữa, ngay trên tay bạn; vùng bên phải chừa cho Hủy/Đánh.\n\nCác bảng không nhận thao tác chạm và có thể bấm xuyên qua. Các chất cùng số được gộp gọn (ví dụ 7♠♣♦♥), tự xuống dòng, KHÔNG vuốt ngang. Đỏ = cả 4 lá cùng số chưa xuất hiện, chỉ là cảnh báo khả năng tứ quý.\n\nTự động phân biệt người đánh theo số bài giảm; lá chưa xác định được người sẽ nằm trong Bạn/khác. Có thể mở Tracker và bấm Đặt lại nếu bộ đếm chưa tự đặt lại.",14,0xffdddddd));
+        root.addView(text("Bố cục v0.7: có nút ↻ reset nhỏ ở góc trên bên trái màn hình, chạm để bắt đầu ván mới. P1/P2/P3 chỉ hiện khi đã có bài đánh; các bảng tự co theo nội dung.\n\nBạn/khác chỉ hiện khi có dữ liệu. Chưa đánh luôn thể hiện các lá chưa ghi nhận theo nhóm số, tự xuống dòng, không vuốt ngang. Đỏ = cả 4 chất của số đó chưa xuất hiện.\n\nỨng dụng tự phát hiện chia bài khi cả ba đối thủ cùng trở lại 13 lá ổn định trong nhiều khung hình và ván cũ đã có người đánh. Nút ↻ dùng khi cần đặt lại thủ công.",14,0xffdddddd));
         root.addView(text("Quyền riêng tư: xử lý hình ảnh trên thiết bị, không truy cập Internet.\nĐể quét cả bàn, chọn 'Toàn bộ màn hình' khi cấp quyền ghi màn hình.",13,0xffbdbdbd));
         ScrollView outer=new ScrollView(this);outer.addView(root);setContentView(outer);
     }
