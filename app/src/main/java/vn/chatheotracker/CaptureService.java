@@ -15,6 +15,9 @@ import android.os.*;
 import android.text.SpannableStringBuilder;
 import android.text.Spanned;
 import android.text.style.ForegroundColorSpan;
+import android.text.style.BackgroundColorSpan;
+import android.text.style.StyleSpan;
+import android.text.style.UnderlineSpan;
 import android.util.TypedValue;
 import android.view.*;
 import android.widget.*;
@@ -46,7 +49,9 @@ public final class CaptureService extends Service {
     private CountRecognizer countRecognizer;
     private final Object stateLock=new Object();
     private long lastScanned=0;
-    private String pending="";private int pendingFrames=0;
+    // Each card is confirmed independently: an icon/chat box can temporarily hide
+    // only part of a played combination, so whole-frame signatures are brittle.
+    private final TemporalCardEvidence recentCards=new TemporalCardEvidence();
     private final LinkedHashSet<String> played=new LinkedHashSet<>();
     private final LinkedHashSet<String>[] byPlayer=new LinkedHashSet[]{new LinkedHashSet<>(),new LinkedHashSet<>(),new LinkedHashSet<>()};
     private final LinkedHashSet<String> otherPlayed=new LinkedHashSet<>();
@@ -154,7 +159,7 @@ public final class CaptureService extends Service {
             image=reader.acquireLatestImage();
             if(image==null)return;
             long now=SystemClock.elapsedRealtime();
-            if(now-lastScanned<300)return;
+            if(now-lastScanned<240)return;
             lastScanned=now;
             Image.Plane plane=image.getPlanes()[0];
             int w=image.getWidth(),h=image.getHeight();
@@ -219,27 +224,22 @@ public final class CaptureService extends Service {
             }
         }else newDealStableFrames=0;
         if(now<ignoreCardsUntil){
-            pending="";pendingFrames=0;
+            recentCards.clear();
             return changed;
         }
-        String signature=String.join(",",visible);
-        if(!signature.isEmpty()){
-            if(signature.equals(pending))pendingFrames++;
-            else {pending=signature;pendingFrames=1;}
-            if(pendingFrames>=2){
-                LinkedHashSet<String> newlySeen=new LinkedHashSet<>();
-                for(String c:visible)if(!played.contains(c)&&!waitingCards.contains(c))newlySeen.add(c);
-                if(!newlySeen.isEmpty()){
-                    waitingCards.addAll(newlySeen);
-                    // A multi-card play can materialize across adjacent captured frames.
-                    if(!cardMoves.isEmpty() && now-cardMoves.get(cardMoves.size()-1).time<650){
-                        cardMoves.get(cardMoves.size()-1).cards.addAll(newlySeen);
-                        cardMoves.get(cardMoves.size()-1).updated=now;
-                    }else cardMoves.add(new CardMove(newlySeen,now));
-                    changed=true;
-                }
-            }
-        }else {pending="";pendingFrames=0;}
+        // A card may disappear for a few frames behind chat/emotes. Accumulate
+        // per-card evidence over time instead of demanding identical full lists.
+        LinkedHashSet<String> newlySeen=recentCards.update(visible,played,waitingCards,now);
+        if(!newlySeen.isEmpty()){
+            waitingCards.addAll(newlySeen);
+            // Merge cards exposed at different instants in the same animation.
+            if(!cardMoves.isEmpty() && now-cardMoves.get(cardMoves.size()-1).updated<750){
+                CardMove last=cardMoves.get(cardMoves.size()-1);
+                last.cards.addAll(newlySeen);
+                last.updated=now;
+            }else cardMoves.add(new CardMove(newlySeen,now));
+            changed=true;
+        }
         if(reconcile(now))changed=true;
         return changed;
     }
@@ -290,7 +290,7 @@ public final class CaptureService extends Service {
         for(LinkedHashSet<String> cards:byPlayer)cards.clear();
         Arrays.fill(knownCounts,-1);Arrays.fill(lastCandidates,-1);
         Arrays.fill(candidateFrames,0);Arrays.fill(missingCards,0);
-        pending="";pendingFrames=0;sawAnyLowerCounter=false;
+        recentCards.clear();sawAnyLowerCounter=false;
         newDealStableFrames=0;
     }
     private void manualReset(){
@@ -323,6 +323,8 @@ public final class CaptureService extends Service {
         view.setBreakStrategy(android.text.Layout.BREAK_STRATEGY_HIGH_QUALITY);
         view.setLineSpacing(0f,1.03f);
         view.setIncludeFontPadding(false);
+        view.setTypeface(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD);
+        view.setShadowLayer(1.7f,1f,1.2f,0xff030609);
         return view;
     }
     private LinearLayout newPanel(){
@@ -330,7 +332,7 @@ public final class CaptureService extends Service {
         layout.setOrientation(LinearLayout.VERTICAL);
         layout.setPadding(dp(6),dp(4),dp(6),dp(4));
         android.graphics.drawable.GradientDrawable background=new android.graphics.drawable.GradientDrawable();
-        background.setColor(0xe9181d2b);
+        background.setColor(0xf0191d2a);
         background.setCornerRadius(dp(6));
         background.setStroke(Math.max(1,dp(.5f)),0x99949ba8);
         layout.setBackground(background);
@@ -375,7 +377,7 @@ public final class CaptureService extends Service {
                     |WindowManager.LayoutParams.FLAG_SECURE,
                 PixelFormat.TRANSLUCENT);
             params.gravity=Gravity.TOP|Gravity.LEFT;
-            params.alpha=.70f;
+            params.alpha=.90f;
             panelParams[i]=params;
             wm.addView(panels[i],params);
         }
@@ -424,11 +426,11 @@ public final class CaptureService extends Service {
     private void sizeOverlayFonts(int w,int h){
         float side=Math.min(w,h);
         for(int i=0;i<3;i++){
-            if(playerRows[i]!=null)playerRows[i].setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(16f,side*.018f));
+            if(playerRows[i]!=null)playerRows[i].setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(18f,side*.021f));
         }
-        if(status!=null)status.setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(11f,side*.014f));
-        if(otherRow!=null)otherRow.setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(13f,side*.015f));
-        if(remainingRow!=null)remainingRow.setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(14f,side*.016f));
+        if(status!=null)status.setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(13f,side*.015f));
+        if(otherRow!=null)otherRow.setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(16f,side*.018f));
+        if(remainingRow!=null)remainingRow.setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(17f,side*.019f));
     }
     private int desiredWidth(TextView text){
         if(text==null||text.getVisibility()!=View.VISIBLE)return 0;
@@ -503,29 +505,47 @@ public final class CaptureService extends Service {
             updateOverlayLayout(metrics.widthPixels,metrics.heightPixels);
         }
     }
-    /** Compact format: 3♠♣♦♥  4♠♣♦♥ ...; every symbol still represents a distinct card.
-     * Whole group is red when all 4 suits of that rank remain unseen.
+    /** Green: rank can participate in a run of 3/4 consecutive remaining pairs.
+     * Red takes priority if all 4 suits of the rank remain unseen.
+     * This is a *possibility across the unobserved pool*, NOT proof that
+     * one opponent actually holds the full combination.
      */
     private CharSequence buildRemainingSpans(Collection<String> remaining){
+        CardWarnings.Result warnings=CardWarnings.analyze(remaining);
         HashSet<String> unseen=new HashSet<>(remaining);
         SpannableStringBuilder sb=new SpannableStringBuilder();
         sb.append("Chưa đánh (").append(String.valueOf(remaining.size())).append("): ");
-        String[] ranks={"3","4","5","6","7","8","9","10","J","Q","K","A","2"};
+        if(warnings.hasTriple||warnings.hasQuad){
+            int a=sb.length();
+            if(warnings.hasTriple)sb.append("3ĐT");
+            if(warnings.hasTriple&&warnings.hasQuad)sb.append("/");
+            if(warnings.hasQuad)sb.append("4ĐT");
+            sb.append("  ");
+            sb.setSpan(new ForegroundColorSpan(0xffa9ffb5),a,sb.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            sb.setSpan(new StyleSpan(android.graphics.Typeface.BOLD),a,sb.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        }
+        String[] ranks=CardWarnings.RANKS;
         String[] suits={"S","C","D","H"};
-        for(String rank:ranks){
-            int count=0;
-            for(String suit:suits)if(unseen.contains(rank+suit))count++;
+        for(int i=0;i<ranks.length;i++){
+            String rank=ranks[i];
+            int count=warnings.remainingByRank[i];
             if(count==0)continue;
-            if(sb.length()>0)sb.append("  ");
             int start=sb.length();
             sb.append(rank);
             for(String suit:suits){
                 if(unseen.contains(rank+suit))sb.append(suitSymbol(suit));
             }
             if(count==4){
-                sb.setSpan(new ForegroundColorSpan(0xffff5555),start,sb.length(),
-                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                sb.setSpan(new ForegroundColorSpan(0xffff8585),start,sb.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                sb.setSpan(new BackgroundColorSpan(0xff49242c),start,sb.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                sb.setSpan(new StyleSpan(android.graphics.Typeface.BOLD),start,sb.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            }else if(warnings.inQuad[i]||warnings.inTriple[i]){
+                sb.setSpan(new ForegroundColorSpan(0xffa5ffbd),start,sb.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                sb.setSpan(new BackgroundColorSpan(0xff194b35),start,sb.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                sb.setSpan(new StyleSpan(android.graphics.Typeface.BOLD),start,sb.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                if(warnings.inQuad[i])sb.setSpan(new UnderlineSpan(),start,sb.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
             }
+            sb.append("  ");
         }
         return sb;
     }

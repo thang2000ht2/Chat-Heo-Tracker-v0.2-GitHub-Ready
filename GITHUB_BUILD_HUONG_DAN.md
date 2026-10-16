@@ -1,3 +1,5 @@
+# Bản mới v0.8: file `.github/workflows/build-apk.yml` tạo artifact `ChatHeoTracker-v0.8-visibility-occlusion-warnings-apk`.
+
 # Chặt Heo Tracker v0.7 — build trên GitHub Actions
 
 1. Giải nén ZIP v0.7, tải toàn bộ nội dung giải nén vào **gốc repository GitHub**. Giữ thư mục ẩn `.github` và file `.github/workflows/build-apk.yml`.

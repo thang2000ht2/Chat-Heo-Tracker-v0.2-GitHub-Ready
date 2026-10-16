@@ -1,3 +1,37 @@
+# Chặt Heo Tracker v0.8 — cảnh báo đôi thông và nhận diện qua nhiều khung hình
+
+Nâng cấp từ v0.7; giữ nút Reset góc trái, tự reset ván, tự gán P1/P2/P3 theo số lá giảm, các HUD chạm xuyên qua và vùng nút Hủy/Đánh ở bên phải.
+
+### Cảnh báo trên hàng Chưa đánh
+- **Đỏ** (chữ đỏ sáng trên nền đỏ sẫm): chưa có lá nào của cùng một hạng được ghi nhận ra bàn, tức còn đủ 4 chất *trong tập lá chưa thấy* — dấu hiệu **có khả năng tứ quý**.
+- **Xanh** (chữ xanh trên nền xanh đậm): hạng còn ít nhất 2 chất chưa thấy, thuộc một chuỗi tối thiểu 3 hạng liên tiếp, đủ điều kiện tạo **3 đôi thông tiềm năng**.
+- **Xanh gạch dưới:** hạng có thể tham gia một chuỗi **4 đôi thông tiềm năng**.
+- Nếu vừa đủ 4 chất vừa có thể tham gia đôi thông, màu **đỏ được ưu tiên** trên nhóm đó. Dòng nhãn `3ĐT/4ĐT` màu xanh cho biết còn có chuỗi tiềm năng.
+- Quy tắc áp dụng liên tiếp từ 3 tới A; **không tính đôi 2** vào đôi thông.
+
+**Rất quan trọng:** Đây chỉ là **khả năng trong các lá chưa được nhận diện là đã đánh**, chưa biết các lá nằm ở tay ai. Khi người chơi bị che hình hoặc phần mềm bỏ sót một lá, cảnh báo có thể sai. Không khẳng định đối phương giữ tứ quý hoặc đôi thông.
+
+### Đọc bài khi bị chat/icon che
+- Thay điều kiện **cả danh sách bài phải y hệt ở 2 khung liên tiếp** bằng **hai bằng chứng độc lập cho từng lá**, cách nhau không quá 1,45 giây.
+- Giữ tín hiệu của lá qua những khung hình bị che ngắt quãng, hỗ trợ nhận được các bộ bài hiện dần khi hiệu ứng di chuyển.
+- Nếu lá bị che **hoàn toàn** trong toàn bộ lượt, không thể khôi phục chỉ từ ảnh màn hình; số lá giảm được dùng để cảnh báo thiếu, **không đoán ra quân bài cụ thể**.
+- Giữ nhận diện hình riêng của từng lớp bài trắng/xám và cơ chế tự gán chủ sở hữu theo số bài giảm.
+
+### Dễ đọc hơn mà không che nút game
+- Chữ danh sách to hơn, đậm hơn và có bóng viền tối nhẹ; nền bảng rõ hơn.
+- Bảng phía dưới vẫn giới hạn 57,5% chiều ngang bên trái ở chế độ ngang, và cho phép bấm xuyên qua.
+- Các lớp vẫn tự co giãn theo nội dung, không giới hạn 22 lá hay bắt cuộn ngang.
+
+### Kiểm tra tại lúc đóng gói
+- 6 bài kiểm tra Java cho 3/4 đôi thông; 10 bài kiểm tra cho xác nhận từng quân qua các khung hình bị che ngắt quãng.
+- **Chưa biên dịch APK / kiểm thử thực tế v0.8 trên Xiaomi** trong môi trường hiện tại (không có Android SDK). Giữ file GitHub Actions như trước để bạn tự build.
+
+## Cài / build
+
+Giải nén toàn bộ ZIP vào gốc repository; mở GitHub **Actions → Build Chặt Heo Tracker APK → Run workflow**. Artifact dự kiến: `ChatHeoTracker-v0.8-visibility-occlusion-warnings-apk` chứa `app-debug.apk`.
+
+---
+
 # Chặt Heo Tracker v0.7 — Auto Reset & Responsive HUD
 
 Phiên bản này kế thừa v0.6 và thực hiện các yêu cầu về giao diện:
