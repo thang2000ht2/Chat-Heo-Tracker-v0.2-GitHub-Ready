@@ -1,9 +1,9 @@
-# Build v1.4 bằng GitHub Actions
+# Biên dịch Chặt Heo Tracker v1.6 qua GitHub Actions
 
-1. Xóa mã nguồn cũ hoặc cập nhật đè toàn bộ các file được thay đổi của v1.4 trong repository (giữ `.github/workflows/build-apk.yml`).
-2. Trong GitHub chọn **Actions → Build Chặt Heo Tracker APK → Run workflow**.
-3. Kiểm tra bước **Test all pure-Java rules, warnings, recognition evidence, suggestions**: phải chạy `TestOpponentBehavior` bên cạnh bảy bài test cũ.
-4. Khi job thành công, tải **ChatHeoTracker-v1.4-auto-behavior-advice-apk** từ mục Artifacts và giải nén lấy `app-debug.apk`.
-5. Trên Xiaomi cấp quyền **ghi màn hình** và **cửa sổ nổi**. Ứng dụng không tự chơi.
+1. Giải nén `ChatHeoTracker_v1.6_OfflineLearning_GitHub.zip`.
+2. Đưa toàn bộ **nội dung** thư mục vào repository GitHub cũ, gồm `.github/workflows/build-apk.yml` (thư mục có dấu chấm đầu). **Thay toàn bộ các file phiên bản cũ**, không chỉ bổ sung Java mới.
+3. Mở **Actions → Build Chặt Heo Tracker APK → Run workflow**.
+4. Workflow kiểm thử **10 nhóm Java** rồi thực hiện `:app:assembleDebug`. Chỉ khi dòng `Build debug APK` thành công mới lấy artifact `ChatHeoTracker-v1.6-learning-players-apk`, giải nén để có `app-debug.apk`.
+5. Nếu gặp lỗi, mở job có dấu X và gửi log từ dòng `error:` đầu tiên trở đi.
 
-Nếu job bị lỗi, gửi dòng lỗi đầu tiên từ bước bị đỏ, không chỉ ảnh chữ `Job failed`.
+**Chưa được biên dịch/kiểm thử trên Xiaomi 17 Pro Max trong môi trường tạo file**. Những mô phỏng chỉ mang tính ước lượng, không chứng minh bài trên tay đối thủ. Không cần token, dịch vụ AI hay quyền Internet.

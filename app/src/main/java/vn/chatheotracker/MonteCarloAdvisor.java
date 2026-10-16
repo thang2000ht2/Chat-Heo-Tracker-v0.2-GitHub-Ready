@@ -358,25 +358,21 @@ final class MonteCarloAdvisor {
         OpponentBehaviorModel.Profile[] profiles=OpponentBehaviorModel.fromHistory(histories);
         double[] answerTotals=new double[options.size()];
         double[] chopTotals=new double[options.size()];
+        // Conditional response-risk indices per seat, not only the combined risk.
+        double[][] individualTotals=new double[options.size()][3];
         double heoChopTotal=0;
         boolean myHeo=false;
         for(String card:hand)if(rank(card)==12)myHeo=true;
         Random random=new Random(seed(hand,table,seen,counts)^0xBADCA12L);
         for(int trial=0;trial<DEALS;trial++){
-            Collections.shuffle(hidden,random);
-            ArrayList<List<String>> opponentHands=new ArrayList<>();
+            List<List<String>> opponentHands=ContextualHandSampler.draw(hidden,counts,profiles,random);
             int[][] opp=new int[3][13],suits=new int[3][13];
             for(int p=0;p<3;p++)Arrays.fill(suits[p],-1);
-            int offset=0;
             for(int p=0;p<3;p++){
-                ArrayList<String> cards=new ArrayList<>();
-                for(int j=0;j<counts[p];j++){
-                    String card=hidden.get(offset++);
-                    cards.add(card);
+                for(String card:opponentHands.get(p)){
                     int r=rank(card);opp[p][r]++;
                     suits[p][r]=Math.max(suits[p][r],suit(card));
                 }
-                opponentHands.add(cards);
             }
             double anyChopStay=1;
             if(myHeo){
@@ -402,9 +398,12 @@ final class MonteCarloAdvisor {
                         }
                     }
                     noneRespond*=1-willingness;
+                    double seatChop=0;
                     if(m.containsTwo && canChopTwo(opp[p],m)){
-                        noneChop*=1-OpponentBehaviorModel.chopWillingness(counts[p],profiles[p]);
+                        seatChop=OpponentBehaviorModel.chopWillingness(counts[p],profiles[p]);
+                        noneChop*=1-seatChop;
                     }
+                    individualTotals[i][p]+=willingness+(1-willingness)*seatChop;
                 }
                 double reply=1-noneRespond;
                 double chop=m.containsTwo?1-noneChop:0;
@@ -434,13 +433,17 @@ final class MonteCarloAdvisor {
         if(selected==null)return new Advice("QUÉT LẠI BÀI","");
         int pct=(int)Math.round(100*selected.response);
         String title="ĐÁNH "+render(selected.move);
-        String detail="≈"+pct+"% mức chặn ước tính ("+DEALS+" mẫu)";
+        int winningIndex=options.indexOf(selected);
+        String detail="≈"+pct+"% mức chặn ước tính (offline) · Trên "
+            +Math.round(100*individualTotals[winningIndex][0]/DEALS)+"% · Trái "
+            +Math.round(100*individualTotals[winningIndex][1]/DEALS)+"% · Phải "
+            +Math.round(100*individualTotals[winningIndex][2]/DEALS)+"%";
         if(myHeo){
             int danger=(int)Math.round(100*heoChopTotal/DEALS);
             // Alert when plausible chopping hands exist, especially near endgame;
             // estimate is about *attempting a heo play*, not every current move.
             if(danger>=12){
-                detail+="\n⚠ HEO: rủi ro chặt ≈"+danger+"% nếu đánh 2";
+                detail+="\n⚠ HEO: nguy cơ bị chặt ≈"+danger+"% nếu đánh 2";
             }
         }
         return new Advice(title,detail);

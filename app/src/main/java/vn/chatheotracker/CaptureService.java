@@ -30,6 +30,7 @@ import java.util.concurrent.Executors;
 public final class CaptureService extends Service {
     static final String ACTION_START="vn.chatheotracker.START",ACTION_STOP="vn.chatheotracker.STOP";
     static final String ACTION_RESET="vn.chatheotracker.RESET";
+    static final String ACTION_CLEAR_LEARNING="vn.chatheotracker.CLEAR_LEARNING";
     static final String ACTION_ADD="vn.chatheotracker.ADD", ACTION_REMOVE="vn.chatheotracker.REMOVE";
     static final String ACTION_NEXT_PLAYER="vn.chatheotracker.NEXT_PLAYER", ACTION_SET_PLAYER="vn.chatheotracker.SET_PLAYER";
     static final String EXTRA_RESULT="projection_result",EXTRA_DATA="projection_data",EXTRA_CARD="card",EXTRA_PLAYER="player";
@@ -91,6 +92,10 @@ public final class CaptureService extends Service {
     private final LinkedHashSet<String> otherPlayed=new LinkedHashSet<>();
     // Play history is newest-first and grouped by actual observed move, not card rank.
     private final RecentMoves[] playerHistory={new RecentMoves(),new RecentMoves(),new RecentMoves()};
+    // On-device learned play patterns belong to the current occupant of each seat.
+    // These persist across hands, unlike the public cards of the current hand.
+    private final LearnedOpponentHistory[] learning={new LearnedOpponentHistory(),new LearnedOpponentHistory(),new LearnedOpponentHistory()};
+    private final SeatIdentityTracker[] seatIdentity=new SeatIdentityTracker[3];
     private final RecentMoves otherHistory=new RecentMoves();
     private final LinkedHashSet<String> waitingCards=new LinkedHashSet<>();
     private final ArrayList<CardMove> cardMoves=new ArrayList<>();
@@ -110,6 +115,16 @@ public final class CaptureService extends Service {
         if(ACTION_STOP.equals(action)){stopSelf();return START_NOT_STICKY;}
         if(ACTION_RESET.equals(action)){
             manualReset();
+            return START_NOT_STICKY;
+        }
+        if(ACTION_CLEAR_LEARNING.equals(action)){
+            synchronized(stateLock){
+                for(int i=0;i<3;i++)learning[i].clear();
+                getSharedPreferences("opponent_learning_v1",MODE_PRIVATE).edit()
+                    .remove("moves_0").remove("moves_1").remove("moves_2").apply();
+                adviceRequestId++;
+            }
+            if(projection==null)stopSelf();
             return START_NOT_STICKY;
         }
         if(ACTION_ADD.equals(action)||ACTION_REMOVE.equals(action)){
@@ -168,6 +183,7 @@ public final class CaptureService extends Service {
             }
         }else pref.edit().remove("hand").remove("hand_source").apply();
         countRecognizer=new CountRecognizer(this);
+        loadOpponentLearning();
         handRecognizer=new HandRecognizer(this);
         wm=(WindowManager)getSystemService(Context.WINDOW_SERVICE);
         createPanel();
@@ -227,13 +243,15 @@ public final class CaptureService extends Service {
             List<String> whiteCards=recognizer.recognizeCurrentPlay(normalized);
             int[] counts=countRecognizer.read(normalized);
             boolean turnNow=LocalTurnDetector.isMyTurn(normalized);
+            String[] seatNames=SeatVisualSignature.read(normalized);
             // Read all visible card corners, even after part of the hand is spent.
             HandRecognizer.Result myCards=handRecognizer.recognizeVisibleHand(normalized);
             if(!myCards.complete)myCards=handRecognizer.recognizeFullHand(normalized);
             normalized.recycle();
             boolean changed,trySuggestion=false,turnBegan=false,turnEnded=false;
             synchronized(stateLock){
-                changed=handleFrame(cards,counts,now);
+                boolean occupantChanged=handleSeatIdentities(seatNames,counts);
+                changed=handleFrame(cards,counts,now) || occupantChanged;
                 if(handleHandFrame(myCards))changed=true;
                 if(updateVisibleHand(myCards))changed=true;
                 updateBoard(whiteCards);
@@ -411,6 +429,10 @@ public final class CaptureService extends Service {
                     accepted.add(card);
                 }
                 playerHistory[drop.player].record(accepted);
+                if(!accepted.isEmpty()){
+                    learning[drop.player].record(accepted);
+                    persistOpponentLearning(drop.player);
+                }
                 if(drop.delta>move.cards.size())missingCards[drop.player]+=drop.delta-move.cards.size();
                 waitingCards.removeAll(move.cards);
                 cardMoves.remove(m);
@@ -438,7 +460,65 @@ public final class CaptureService extends Service {
         }
         return changed;
     }
+    /** No names or screenshots uploaded. Persistent local play samples are seat-scoped. */
+    private void loadOpponentLearning(){
+        android.content.SharedPreferences sp=getSharedPreferences("opponent_learning_v1",MODE_PRIVATE);
+        for(int i=0;i<3;i++){
+            learning[i]=LearnedOpponentHistory.decode(sp.getString("moves_"+i,""));
+            seatIdentity[i]=new SeatIdentityTracker(sp.getString("fingerprint_"+i,null));
+            if(seatIdentity[i].active()==null)learning[i].clear();
+        }
+    }
+    private void persistOpponentLearning(int i){
+        if(i<0||i>=3)return;
+        getSharedPreferences("opponent_learning_v1",MODE_PRIVATE).edit()
+            .putString("moves_"+i,learning[i].encode())
+            .apply();
+    }
+    private void persistIdentity(int i){
+        android.content.SharedPreferences.Editor e=
+            getSharedPreferences("opponent_learning_v1",MODE_PRIVATE).edit();
+        if(seatIdentity[i].active()==null)e.remove("fingerprint_"+i);
+        else e.putString("fingerprint_"+i,seatIdentity[i].active());
+        e.putString("moves_"+i,learning[i].encode()).apply();
+    }
+    /**
+     * A different, stable nickname ribbon resets that seat's learned profile.
+     * Leaving is confirmed only when the OTHER seats remain visible, so a menu,
+     * full-screen chat, or capture interruption does not erase everybody.
+     */
+    private boolean handleSeatIdentities(String[] signatures,int[] counts){
+        if(seatIdentity[0]==null)return false;
+        boolean changed=false;
+        for(int i=0;i<3;i++){
+            boolean roomVisible=false;
+            for(int j=0;j<3;j++)if(j!=i && signatures[j]!=null &&
+                    counts!=null && j<counts.length && counts[j]>=0)roomVisible=true;
+            SeatIdentityTracker.Event ev=seatIdentity[i].observe(signatures[i],roomVisible);
+            if(ev==SeatIdentityTracker.Event.NONE)continue;
+            if(ev==SeatIdentityTracker.Event.REPLACED || ev==SeatIdentityTracker.Event.VACATED){
+                // Keep the global already-played deck until the next confirmed deal,
+                // but don't attribute earlier plays to the new occupant.
+                learning[i].clear();
+                byPlayer[i].clear();
+                playerHistory[i].clear();
+                missingCards[i]=0;
+                knownCounts[i]=-1;lastCandidates[i]=-1;candidateFrames[i]=0;
+                for(int k=countDrops.size()-1;k>=0;k--)if(countDrops.get(k).player==i)countDrops.remove(k);
+                adviceRequestId++;autoAdvicePending=myTurn;
+                autoAdviceScanFrames=0;
+                changed=true;
+            }
+            persistIdentity(i);
+        }
+        return changed;
+    }
+
     private void resetRoundInternal(){
+        for(int i=0;i<3;i++){
+            learning[i].newRound();
+            persistOpponentLearning(i);
+        }
         played.clear();otherPlayed.clear();waitingCards.clear();cardMoves.clear();countDrops.clear();
         handCards.clear();myPlayed.clear();handPending="";handPendingFrames=0;
         manualHandOverride=false;
@@ -825,7 +905,9 @@ public final class CaptureService extends Service {
             seen=new LinkedHashSet<>(played);
             lead=new ArrayList<>(currentBoard);
             counts=knownCounts.clone();
-            for(RecentMoves h:playerHistory)histories.add(h.snapshot());
+            // Full saved verified play history of the current occupants.
+            // Do not infer an unobserved pass or secretly see hidden hands.
+            for(LearnedOpponentHistory h:learning)histories.add(h.snapshot());
             consistent=conserved(hand,seen,counts);
             handOK=!hand.isEmpty() && (visualHandTrusted ? lastVisualHandSize==hand.size()
                 : !handPending.isEmpty()||manualHandOverride);
@@ -950,7 +1032,9 @@ public final class CaptureService extends Service {
             p.width=Math.min(maxWidth,Math.max(minWidth,needed+dp(20)));
             p.height=WindowManager.LayoutParams.WRAP_CONTENT;
             if(landscape){
-                if(i==0){p.x=(width-p.width)/2;p.y=(int)(height*.215f);}
+                // Keep P1 history BELOW their red nickname ribbon (~24–28% screen height)
+                // so MediaProjection can read the name for automatic player replacement.
+                if(i==0){p.x=(width-p.width)/2;p.y=(int)(height*.305f);}
                 // Side players sit ABOVE their avatars/card counters to free mid-table space.
                 else if(i==1){p.x=(int)(width*.014f);p.y=(int)(height*.145f);}
                 else if(i==2){p.x=width-p.width-(int)(width*.014f);p.y=(int)(height*.145f);}

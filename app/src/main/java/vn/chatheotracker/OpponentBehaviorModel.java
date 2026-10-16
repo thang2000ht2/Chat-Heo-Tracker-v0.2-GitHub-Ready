@@ -9,12 +9,16 @@ import java.util.*;
  */
 final class OpponentBehaviorModel {
     static final class Profile {
-        final int singles, pairs, triples, fours, brokenPairs, moves;
+        final int singles, pairs, triples, fours, straights, highSingles, brokenPairs, moves;
         Profile(List<? extends Collection<String>> history) {
-            int one=0,two=0,three=0,four=0,broken=0,total=0;
+            int one=0,two=0,three=0,four=0,straight=0,high=0,broken=0,total=0;
             HashMap<String,Integer> previouslySingle=new HashMap<>();
             if(history!=null)for(Collection<String> move:history){
-                if(move==null||move.isEmpty())continue;
+                if(move==null||move.isEmpty()){
+                    // Empty move means a *new hand*, not a skipped/unknown play.
+                    previouslySingle.clear();
+                    continue;
+                }
                 ArrayList<String> c=new ArrayList<>();
                 for(String s:move)if(RecentMoves.isCard(s))c.add(s);
                 if(c.isEmpty())continue;
@@ -25,14 +29,23 @@ final class OpponentBehaviorModel {
                 }
                 if(c.size()==1){
                     one++;
+                    if(MonteCarloAdvisor.rank(c.get(0))>=10)high++;
                     String rank=c.get(0).substring(0,c.get(0).length()-1);
                     if(previouslySingle.getOrDefault(rank,0)>0)broken++;
                     previouslySingle.put(rank,previouslySingle.getOrDefault(rank,0)+1);
                 } else if(c.size()==2 && rankCounts.size()==1)two++;
                 else if(c.size()==3 && rankCounts.size()==1)three++;
                 else if(c.size()==4 && rankCounts.size()==1)four++;
+                else if(c.size()>=3 && rankCounts.size()==c.size()){
+                    int low=13,highRank=-1;
+                    for(String card:c){int r=MonteCarloAdvisor.rank(card);
+                        low=Math.min(low,r);highRank=Math.max(highRank,r);
+                    }
+                    if(low>=0 && highRank<12 && highRank-low+1==c.size())straight++;
+                }
             }
-            singles=one;pairs=two;triples=three;fours=four;brokenPairs=broken;moves=total;
+            singles=one;pairs=two;triples=three;fours=four;straights=straight;
+            highSingles=high;brokenPairs=broken;moves=total;
         }
         double breakPairWillingness(){
             // Two singles of same rank on different turns prove a pair was split.
@@ -68,6 +81,10 @@ final class OpponentBehaviorModel {
             else if(ranks[r]==4)willingness*=.39;
             if(r==12)willingness*=.47; // Preserve heo for control / avoid chop.
             else if(r>=10)willingness*=.84;
+            // Higher cards used as solo plays before => mildly more willing
+            // to spend another high card. Shrink toward neutral for tiny history.
+            if(r>=10 && p.moves>=2 && p.highSingles>0)
+                willingness*=1+Math.min(.18,.045*p.highSingles);
             // Close to finishing, a player is more willing to break protected combinations.
             if(remaining<=3)willingness=Math.min(.97,willingness+0.35);
             else if(remaining<=5)willingness=Math.min(.93,willingness+0.18);
