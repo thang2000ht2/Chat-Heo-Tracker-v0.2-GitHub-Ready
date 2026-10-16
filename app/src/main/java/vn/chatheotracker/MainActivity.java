@@ -38,7 +38,7 @@ public final class MainActivity extends Activity {
             Intent it = new Intent(this,CaptureService.class);
             it.setAction(CaptureService.ACTION_STOP);startService(it);state.setText("Đã yêu cầu dừng");
         });root.addView(stop);
-        root.addView(text("Tự động phân biệt người đánh theo số bài giảm:\nP1 = người trên, P2 = người trái, P3 = người phải. Không phải chọn người đánh đầu tiên.\n\nCác lá không thể gán chắc chắn cho đối thủ sẽ nằm ở dòng Bạn/khác; không tự đoán sai người chơi.\n\nVuốt ngang từng hàng trong popup để xem hết 52 lá. Nút Ván mới vẫn có thể sử dụng nếu ứng dụng chưa tự phát hiện ván mới.",14,0xffdddddd));
+        root.addView(text("Bố cục v0.5: P1 (trên), P2 (trái), P3 (phải) đặt dưới mỗi đối thủ.\nBạn/khác và CHƯA ĐÁNH nằm phía trên bài của bạn.\n\nCác lá tự xuống dòng, KHÔNG phải vuốt ngang. Đỏ = cả 4 lá cùng số chưa xuất hiện, chỉ là cảnh báo khả năng tứ quý.\n\nTự động phân biệt người đánh theo số bài giảm; lá chưa xác định được người sẽ nằm trong Bạn/khác. Có thể dùng Ván mới nếu bộ đếm chưa tự đặt lại.",14,0xffdddddd));
         root.addView(text("Quyền riêng tư: xử lý hình ảnh trên thiết bị, không truy cập Internet.\nĐể quét cả bàn, chọn 'Toàn bộ màn hình' khi cấp quyền ghi màn hình.",13,0xffbdbdbd));
         ScrollView outer=new ScrollView(this);outer.addView(root);setContentView(outer);
     }

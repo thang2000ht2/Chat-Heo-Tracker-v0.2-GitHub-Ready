@@ -1,3 +1,34 @@
+# Chặt Heo Tracker v0.5 — bố cục đầy đủ lá (bản thử nghiệm)
+
+## Thay đổi từ v0.4
+
+- Xóa HorizontalScrollView và SingleLine: các lá được xuống dòng tự động, **không bị cắt sau 22 lá và không cần cuộn ngang**.
+- Tách thành 4 cửa sổ nổi: P1 gần người trên, P2 gần người trái, P3 gần người phải, và bảng cuối (Bạn/khác + Chưa đánh) phía trên bài của bạn.
+- Bảng cuối hiển thị tất cả **52 lá ban đầu**, trừ các quân app đã ghi nhận được là đã đánh; sắp xếp 3 đến 2, trong hạng theo ♠ ♣ ♦ ♥.
+- Các quân **còn đủ bốn chất cùng hạng chưa ghi nhận là đã đánh** được tô **đỏ tươi** ở dòng Chưa đánh. Đây không phải bằng chứng ai đó đang cầm tứ quý: 4 lá có thể phân tán ở các tay và có thể có lá trên tay bạn.
+- Tự điều chỉnh kích thước phông và vị trí khi xoay sang màn hình ngang.
+- Giữ nguyên xác định người đánh bằng biến động số bài của P1 / P2 / P3 từ v0.4; không cần chọn lượt thủ công.
+- `FLAG_SECURE` trên các cửa sổ giúp hạn chế chữ trong overlay bị quét lại như bài trong hình ghi màn hình. Vì thế cửa sổ nổi có thể **không xuất hiện trong bản ghi màn hình**, dù vẫn nhìn thấy trên điện thoại.
+
+## Giới hạn cần biết
+
+- Ứng dụng vẫn là **mã nguồn chưa biên dịch/kiểm thử trên Xiaomi**; độ chính xác nhận diện quân và ghép người chơi chưa được chứng nhận. Nếu mất các lá trong lúc quét, ô Chưa đánh không thể tự suy ra lá bị bỏ sót.
+- Cửa sổ có thể đè lên vài thành phần của game tùy độ phân giải / cỡ chữ HyperOS. Cần thử trên máy thật và tinh chỉnh tọa độ nếu cần.
+- Độ dài các danh sách không bị giới hạn trong mã nguồn UI. Vị trí bảng cuối có thể chiếm một phần phần trên của tay bài nếu chế độ hiển thị chữ trên máy quá lớn.
+- Việc tô đỏ chỉ phụ thuộc các lá **chưa từng được ghi nhận là đã đánh**, không loại riêng lá đang nằm trên tay bạn.
+- Sử dụng công cụ hỗ trợ trò chơi có thể trái điều khoản game.
+
+## Build APK qua GitHub Actions
+
+1. Giải nén file ZIP và đưa **toàn bộ nội dung**, gồm cả `.github/workflows/build-apk.yml`, lên GitHub.
+2. Mở **Actions → Build Chặt Heo Tracker APK → Run workflow**.
+3. Khi job hoàn tất, tải artifact `ChatHeoTracker-v0.5-full-cards-apk`, bên trong có `app-debug.apk`.
+4. Cài trên Xiaomi Android 16, mở app và cấp quyền **hiển thị trên ứng dụng khác** cùng **ghi toàn bộ màn hình**.
+
+Đây là ZIP **mã nguồn**; môi trường chuẩn bị chưa có Android SDK để build / kiểm thử APK.
+
+---
+
 # Chặt Heo Tracker v0.4 — Tự nhận biết người vừa đánh
 
 ## Cách hoạt động

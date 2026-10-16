@@ -12,6 +12,10 @@ import android.media.ImageReader;
 import android.media.projection.MediaProjection;
 import android.media.projection.MediaProjectionManager;
 import android.os.*;
+import android.text.SpannableStringBuilder;
+import android.text.Spanned;
+import android.text.style.ForegroundColorSpan;
+import android.util.TypedValue;
 import android.view.*;
 import android.widget.*;
 import java.nio.ByteBuffer;
@@ -30,9 +34,12 @@ public final class CaptureService extends Service {
     private HandlerThread worker;
     private Handler workerHandler, mainHandler;
     private WindowManager wm;
-    private View panel;
-    private final TextView[] rowViews=new TextView[5];
-    private TextView status;
+    // Independent overlays placed near each player and just above the local hand.
+    private final View[] panels=new View[4];
+    private final WindowManager.LayoutParams[] panelParams=new WindowManager.LayoutParams[4];
+    private final TextView[] playerRows=new TextView[3];
+    private final TextView[] playerTitles=new TextView[3];
+    private TextView otherRow, remainingRow, remainingTitle, status;
     private CardRecognizer recognizer;
     private CountRecognizer countRecognizer;
     private final Object stateLock=new Object();
@@ -109,7 +116,10 @@ public final class CaptureService extends Service {
         projection.registerCallback(new MediaProjection.Callback(){
             @Override public void onStop(){mainHandler.post(()->stopSelf());}
             @Override public void onCapturedContentResize(int width,int height) {
-                mainHandler.post(() -> resizeCapture(width,height));
+                mainHandler.post(() -> {
+                    resizeCapture(width,height);
+                    relayoutOverlays(width,height);
+                });
             }
         },mainHandler);
         android.util.DisplayMetrics dm=new android.util.DisplayMetrics();
@@ -268,93 +278,178 @@ public final class CaptureService extends Service {
         final int player,delta;final long time;
         CountDrop(int id,int size,long timestamp){player=id;delta=size;time=timestamp;}
     }
-    private TextView addCardRow(LinearLayout parent,String label){
-        LinearLayout line=new LinearLayout(this);line.setOrientation(LinearLayout.HORIZONTAL);
-        line.setGravity(Gravity.CENTER_VERTICAL);
-        TextView caption=new TextView(this);caption.setText(label);
-        caption.setTextColor(0xffffdfa1);caption.setTextSize(10);
-        caption.setMinWidth(dp(67));
-        line.addView(caption);
-        HorizontalScrollView scroller=new HorizontalScrollView(this);
-        scroller.setHorizontalScrollBarEnabled(false);
-        TextView contents=new TextView(this);
-        contents.setTextColor(0xffffffff);contents.setTextSize(10);
-        contents.setSingleLine(true);
-        contents.setPadding(dp(2),dp(1),dp(6),dp(1));
-        scroller.addView(contents);
-        line.addView(scroller,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f));
-        parent.addView(line);
-        return contents;
-    }
     private int dp(float x){return (int)(x*getResources().getDisplayMetrics().density+0.5f);}
+
+    /** All card lists wrap naturally; no horizontal swiping, fixed single line, or maxLines. */
+    private TextView newCardText(float sizeSp){
+        TextView view=new TextView(this);
+        view.setTextSize(sizeSp);
+        view.setTextColor(0xffffffff);
+        view.setSingleLine(false);
+        view.setHorizontallyScrolling(false);
+        view.setEllipsize(null);
+        view.setBreakStrategy(android.text.Layout.BREAK_STRATEGY_HIGH_QUALITY);
+        view.setLineSpacing(0f,1.03f);
+        view.setIncludeFontPadding(false);
+        return view;
+    }
+    private LinearLayout newPanel(){
+        LinearLayout layout=new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dp(6),dp(4),dp(6),dp(4));
+        android.graphics.drawable.GradientDrawable background=new android.graphics.drawable.GradientDrawable();
+        background.setColor(0xe9181d2b);
+        background.setCornerRadius(dp(6));
+        background.setStroke(Math.max(1,dp(.5f)),0x99949ba8);
+        layout.setBackground(background);
+        return layout;
+    }
+    private TextView newCaption(String label){
+        TextView t=new TextView(this);
+        t.setText(label);t.setTextSize(10);t.setTextColor(0xffffdfa1);
+        t.setIncludeFontPadding(false);
+        return t;
+    }
     private void createPanel(){
-        LinearLayout wrap=new LinearLayout(this);wrap.setOrientation(LinearLayout.VERTICAL);
-        wrap.setPadding(dp(5),dp(2),dp(5),dp(2));
-        android.graphics.drawable.GradientDrawable bg=new android.graphics.drawable.GradientDrawable();
-        bg.setColor(0xf2171b27);bg.setCornerRadius(dp(8));bg.setStroke(dp(1),0xff707780);
-        wrap.setBackground(bg);
-        LinearLayout toolbar=new LinearLayout(this);toolbar.setOrientation(LinearLayout.HORIZONTAL);
-        TextView header=new TextView(this);
-        header.setText("☰  ĐẾM BÀI  ");
-        header.setTextColor(0xffeeeeee);header.setTextSize(10);
-        toolbar.addView(header,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f));
-        TextView reset=new TextView(this);reset.setText("Ván mới   ");reset.setTextSize(10);
-        reset.setTextColor(0xffffdfa1);reset.setOnClickListener(v->{
-            synchronized(stateLock){resetRoundInternal();}refresh();
-        });toolbar.addView(reset);
-        TextView hide=new TextView(this);hide.setText("Thu gọn");hide.setTextSize(10);
-        hide.setTextColor(0xffffdfa1);toolbar.addView(hide);wrap.addView(toolbar);
-        status=new TextView(this);status.setTextColor(0xfff9dd76);status.setTextSize(9);
-        wrap.addView(status);
-        rowViews[0]=addCardRow(wrap,"P1 (Trên)");
-        rowViews[1]=addCardRow(wrap,"P2 (Trái)");
-        rowViews[2]=addCardRow(wrap,"P3 (Phải)");
-        rowViews[3]=addCardRow(wrap,"Bạn/khác");
-        rowViews[4]=addCardRow(wrap,"Chưa đánh");
-        hide.setOnClickListener(v->{
-            View firstRow=(View)rowViews[0].getParent().getParent();
-            boolean show=firstRow.getVisibility()==View.GONE;
-            for(TextView row:rowViews){
-                View line=(View)row.getParent().getParent();line.setVisibility(show?View.VISIBLE:View.GONE);
-            }
-            status.setVisibility(show?View.VISIBLE:View.GONE);
-            hide.setText(show?"Thu gọn":"Mở rộng");
-        });
-        int type=WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY;
+        if(wm==null)return;
+        String[] labels={"P1 • Trên", "P2 • Trái", "P3 • Phải"};
+        for(int i=0;i<3;i++){
+            LinearLayout layout=newPanel();
+            playerTitles[i]=newCaption(labels[i]);
+            playerRows[i]=newCardText(10.5f);
+            layout.addView(playerTitles[i]);
+            layout.addView(playerRows[i]);
+            panels[i]=layout;
+        }
+        LinearLayout bottom=newPanel();
+        LinearLayout bar=new LinearLayout(this);bar.setOrientation(LinearLayout.HORIZONTAL);
+        status=newCaption("Đã thấy 0/52 • Đỏ = 4 lá cùng số chưa xuất hiện");
+        status.setTextSize(9);
+        bar.addView(status,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1));
+        TextView reset=newCaption("Ván mới ↻");
+        reset.setPadding(dp(5),0,dp(2),0);
+        reset.setOnClickListener(v->{synchronized(stateLock){resetRoundInternal();}refresh();});
+        bar.addView(reset);
+        bottom.addView(bar);
+        bottom.addView(newCaption("Bạn / khác đã đánh"));
+        otherRow=newCardText(10.5f);
+        bottom.addView(otherRow);
+        remainingTitle=newCaption("CHƯA ĐÁNH • 52 lá");
+        bottom.addView(remainingTitle);
+        remainingRow=newCardText(10.5f);
+        bottom.addView(remainingRow);
+        panels[3]=bottom;
+
         android.util.DisplayMetrics metrics=new android.util.DisplayMetrics();
         wm.getDefaultDisplay().getRealMetrics(metrics);
-        int width=Math.min((int)(metrics.widthPixels*0.53f),dp(480));
-        WindowManager.LayoutParams p=new WindowManager.LayoutParams(width,WindowManager.LayoutParams.WRAP_CONTENT,type,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE|WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
-            PixelFormat.TRANSLUCENT);
-        p.gravity=Gravity.TOP|Gravity.LEFT;p.x=dp(8);p.y=dp(8);
-        header.setOnTouchListener(new View.OnTouchListener(){int initialX,initialY;float downX,downY;
-            @Override public boolean onTouch(View v,MotionEvent e){
-                if(e.getAction()==MotionEvent.ACTION_DOWN){
-                    initialX=p.x;initialY=p.y;downX=e.getRawX();downY=e.getRawY();return true;
-                }
-                if(e.getAction()==MotionEvent.ACTION_MOVE){
-                    p.x=initialX+(int)(e.getRawX()-downX);
-                    p.y=initialY+(int)(e.getRawY()-downY);
-                    wm.updateViewLayout(wrap,p);return true;
-                }
-                return e.getAction()==MotionEvent.ACTION_UP;
-            }
-        });
-        panel=wrap;wm.addView(panel,p);refresh();
+        // Start in current device orientation; game may rotate after permission dialog.
+        sizeOverlayFonts(metrics.widthPixels,metrics.heightPixels);
+        for(int i=0;i<panels.length;i++){
+            WindowManager.LayoutParams params=new WindowManager.LayoutParams(
+                WindowManager.LayoutParams.WRAP_CONTENT,WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                    |WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                    // Keep overlay text out of MediaProjection recognition frames.
+                    |WindowManager.LayoutParams.FLAG_SECURE
+                    |(i<3?WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE:0),
+                PixelFormat.TRANSLUCENT);
+            params.gravity=Gravity.TOP|Gravity.LEFT;
+            panelParams[i]=params;
+            applyPosition(i,metrics.widthPixels,metrics.heightPixels);
+            wm.addView(panels[i],params);
+        }
+        refresh();
+    }
+    private void relayoutOverlays(int width,int height){
+        if(wm==null||width<=0||height<=0)return;
+        sizeOverlayFonts(width,height);
+        for(int i=0;i<panels.length;i++){
+            if(panels[i]==null||panelParams[i]==null)continue;
+            applyPosition(i,width,height);
+            try{wm.updateViewLayout(panels[i],panelParams[i]);}
+            catch(Exception ex){android.util.Log.w("Tracker","Relayout overlay",ex);}
+        }
+    }
+    /** Pixel-based fonts scale with the game canvas, not a phone's dp density. */
+    private void sizeOverlayFonts(int w,int h){
+        float side=Math.min(w,h);
+        for(int i=0;i<3;i++){
+            if(playerTitles[i]!=null)playerTitles[i].setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(14f,side*.016f));
+            if(playerRows[i]!=null)playerRows[i].setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(16f,side*.019f));
+        }
+        if(status!=null)status.setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(12f,side*.014f));
+        if(remainingTitle!=null)remainingTitle.setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(13f,side*.016f));
+        if(otherRow!=null)otherRow.setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(15f,side*.019f));
+        if(remainingRow!=null)remainingRow.setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(15f,side*.018f));
+    }
+    /** Positions are calibrated to the provided 2048x942 landscape game screen. */
+    private void applyPosition(int i,int width,int height){
+        WindowManager.LayoutParams p=panelParams[i];
+        if(p==null)return;
+        if(width<height){
+            // Portrait fallback while permission/dialog/activity is still visible.
+            p.width=(int)(width*.96f);p.x=(int)(width*.02f);
+            p.y=(int)(height*(.12f+i*.15f));
+            return;
+        }
+        final float[][] zones={
+            // width, left, top: beneath the counter/avatar, outside center-card scan zone.
+            {.30f,.350f,.255f},    // P1 under the top opponent
+            {.305f,.012f,.495f},   // P2 under the left opponent
+            {.305f,.683f,.495f},   // P3 under the right opponent
+            {.78f,.110f,.560f}     // own/unknown + all 52 just above local hand
+        };
+        p.width=Math.max(dp(120),(int)(width*zones[i][0]));
+        p.x=(int)(width*zones[i][1]);
+        p.y=(int)(height*zones[i][2]);
     }
     private void refresh(){
-        if(status==null)return;
+        if(remainingRow==null)return;
         synchronized(stateLock){
-            StringBuilder st=new StringBuilder("Đã đánh: ").append(played.size()).append("/52");
-            st.append("  |  Đang đối chiếu: ").append(waitingCards.size());
+            String[] names={"P1 • Trên", "P2 • Trái", "P3 • Phải"};
+            for(int i=0;i<3;i++){
+                if(playerTitles[i]!=null)playerTitles[i].setText(names[i]+" ("+byPlayer[i].size()+")");
+                if(playerRows[i]!=null)playerRows[i].setText(renderSet(byPlayer[i]));
+            }
+            otherRow.setText(renderSet(otherPlayed));
+            List<String> remaining=remainingCards();
+            remainingTitle.setText("CHƯA ĐÁNH ("+remaining.size()+"/52)");
+            remainingRow.setText(buildRemainingSpans(remaining));
+            StringBuilder st=new StringBuilder("Đã thấy: ").append(played.size()).append("/52");
+            if(!waitingCards.isEmpty())st.append(" • Đang xác định: ").append(waitingCards.size());
             int missing=missingCards[0]+missingCards[1]+missingCards[2];
-            if(missing>0)st.append("  |  Có thể bỏ sót ").append(missing).append(" lá");
+            if(missing>0)st.append(" • Có thể bỏ sót: ").append(missing);
+            st.append(" • Đỏ: 4 lá cùng số chưa thấy");
             status.setText(st.toString());
-            for(int i=0;i<3;i++)rowViews[i].setText(renderSet(byPlayer[i]));
-            rowViews[3].setText(renderSet(otherPlayed));
-            rowViews[4].setText("("+(52-played.size())+") "+renderSet(remainingCards()));
         }
+    }
+    /** Highlight a full rank only when ALL FOUR distinct suits remain unrecorded.
+     * This is a risk flag, NOT a claim that one opponent holds a four-of-a-kind.
+     */
+    private CharSequence buildRemainingSpans(Collection<String> remaining){
+        HashSet<String> unseen=new HashSet<>(remaining);
+        SpannableStringBuilder sb=new SpannableStringBuilder();
+        String[] ranks={"3","4","5","6","7","8","9","10","J","Q","K","A","2"};
+        String[] suits={"S","C","D","H"};
+        for(String rank:ranks){
+            int count=0;
+            for(String suit:suits)if(unseen.contains(rank+suit))count++;
+            if(count==0)continue;
+            if(sb.length()>0)sb.append("   ");
+            int start=sb.length();
+            for(String suit:suits){
+                String card=rank+suit;
+                if(!unseen.contains(card))continue;
+                if(sb.length()>start)sb.append(" ");
+                sb.append(pretty(card));
+            }
+            if(count==4){
+                sb.setSpan(new ForegroundColorSpan(0xffff5555),start,sb.length(),
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            }
+        }
+        return sb;
     }
     private static String pretty(String s){
         if(s.isEmpty())return s;
@@ -411,8 +506,12 @@ public final class CaptureService extends Service {
         MediaProjection old=projection;projection=null;
         if(old!=null)try{old.stop();}catch(Exception ignored){}
         if(worker!=null){worker.quitSafely();worker=null;}
-        if(panel!=null && wm!=null)try{wm.removeView(panel);}catch(Exception ignored){}
-        panel=null;status=null;
+        if(wm!=null)for(int i=0;i<panels.length;i++){
+            if(panels[i]!=null)try{wm.removeView(panels[i]);}catch(Exception ignored){}
+            panels[i]=null;panelParams[i]=null;
+        }
+        Arrays.fill(playerRows,null);Arrays.fill(playerTitles,null);
+        otherRow=null;remainingRow=null;remainingTitle=null;status=null;
         super.onDestroy();
     }
     @Override public android.os.IBinder onBind(Intent i){return null;}
