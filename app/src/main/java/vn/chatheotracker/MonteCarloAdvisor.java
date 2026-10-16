@@ -54,6 +54,11 @@ final class MonteCarloAdvisor {
     }
     static Advice advise(Collection<String> myHand, Collection<String> table,
                          Collection<String> seen, int[] counts){
+        return advise(myHand,table,seen,counts,StrategyMode.PLACEMENT);
+    }
+    static Advice advise(Collection<String> myHand, Collection<String> table,
+                         Collection<String> seen, int[] counts, StrategyMode mode){
+        if(mode==null)mode=StrategyMode.PLACEMENT;
         if(myHand==null||myHand.isEmpty())return new Advice("Chưa có bài trên tay", "Nhập bài hiện tại trong Tracker rồi bấm Gợi ý. Không suy đoán bài tay từ dữ liệu thiếu.");
         if(myHand.size()>13)return new Advice("Dữ liệu bài tay không hợp lệ", "Tối đa 13 lá trong một tay.");
         Set<String> uniq=new HashSet<>(myHand);
@@ -68,9 +73,9 @@ final class MonteCarloAdvisor {
             // treat the table cards as hidden cards in sampling.
         }
         MonteCarloAdvisor engine=new MonteCarloAdvisor(myHand);
-        return engine.compute(table,seen,counts);
+        return engine.compute(table,seen,counts,mode);
     }
-    private Advice compute(Collection<String> table,Collection<String> seen,int[] counts){
+    private Advice compute(Collection<String> table,Collection<String> seen,int[] counts,StrategyMode mode){
         Move toBeat=(table!=null && !table.isEmpty())?classifyCards(table):null;
         if(table!=null && !table.isEmpty() && toBeat==null)
             return new Advice("Chưa đọc rõ bài giữa bàn", "Không đưa gợi ý đánh khi chưa xác nhận được bộ bài cần chặn hoặc luật chặt.");
@@ -133,8 +138,13 @@ final class MonteCarloAdvisor {
             Move m=c.move;
             int rem=full^m.mask;
             int remainingCards=hand.size()-m.count;
-            // Low future play count is more important than raw number of cards discarded.
-            double score=85-15.0*minTurns[rem] + 1.6*m.count;
+            // Preference differs by game objective. These are tunable HEURISTICS, not
+            // a measured probability of finishing first or fourth. Under ranked play
+            // avoid being left with many cards when an opponent is near finishing.
+            double futureTurnWeight=mode==StrategyMode.FIRST?18.0:12.0;
+            double sheddingWeight=mode==StrategyMode.FIRST?1.6:2.8;
+            double score=85-futureTurnWeight*minTurns[rem] + sheddingWeight*m.count;
+            if(mode==StrategyMode.PLACEMENT && minOpp<=3)score+=4.0*m.count;
             // Keep reliable control cards as a way back into the lead.
             double control=0;
             for(int j=0;j<hand.size();j++)if((rem&(1<<j))!=0){
@@ -144,15 +154,15 @@ final class MonteCarloAdvisor {
             if(sampling){
                 c.response=answered[i]/deals;
                 c.chop=chopped[i]/deals;
-                score-=21*c.response;
-                if(m.containsTwo)score-=27*c.chop;  // money/penalty exposure proxy
+                score-=(mode==StrategyMode.FIRST?25:19)*c.response;
+                if(m.containsTwo)score-=(mode==StrategyMode.FIRST?24:32)*c.chop;
             }else{
                 // Declared explicitly as heuristic when the counters are incomplete.
                 score-=m.highRank*0.75;
                 if(m.containsTwo)score-=7;
             }
             // Discarding an unnecessary 2 too early has monetary and tempo risk.
-            if(m.containsTwo && remainingCards>=5)score-=7;
+            if(m.containsTwo && remainingCards>=5)score-=(mode==StrategyMode.FIRST?7:12);
             // Protect higher-cost leftover 2s when an opponent can finish immediately.
             if(minOpp<=2){
                 for(int j=0;j<hand.size();j++)if((rem&(1<<j))!=0&&rank(hand.get(j))==12)score-=7;
@@ -173,6 +183,8 @@ final class MonteCarloAdvisor {
                 .append(minTurns[full^c.move.mask]).append(" lượt tối thiểu");
             if(sampling)detail.append(" · có bài để chặn: ").append((int)Math.round(100*c.response)).append("% mẫu");
         }
+        detail.append("\nChế độ: ").append(mode.label)
+              .append(" · điểm xếp hạng/rủi ro là trọng số chiến thuật, không phải dự báo thứ hạng.");
         detail.append("\n");
         if(sampling){
             detail.append(DEALS).append(" mẫu chia bài · cân bằng về trước và rủi ro chặt/phạt (ước lượng)");

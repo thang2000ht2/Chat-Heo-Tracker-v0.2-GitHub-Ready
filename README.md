@@ -1,38 +1,30 @@
-# Chặt Heo Tracker v1.1 – Monte Carlo Strategy (bản thử nghiệm)
+# Chặt Heo Tracker v1.2 — nhận diện bài tay & Gợi ý 5 giây (bản thử nghiệm)
 
-## Có gì mới
+## Thay đổi chính
 
-- Nút **Gợi ý** chạy khi người chơi chủ động bấm.
-- Phân rã **toàn bộ tổ hợp hợp lệ trong tay** để tìm số lượt tối thiểu xả bài còn lại (không phải chỉ chọn bộ nhiều lá).
-- Khi đã có đủ bài công khai, bài tay hiện tại và số lá của cả ba đối thủ khớp bộ 52 lá: lấy mẫu **192 cách phân chia bài còn ẩn**, ước lượng tần suất từng người có thể chặn một nước đánh.
-- Cho 3 lựa chọn theo điểm tương đối; chú ý rủi ro giữ/đánh heo, trả giá nếu bị chặt, đối thủ đang gần về.
-- Dữ liệu không đủ, trùng hoặc đọc thiếu: ghi rõ **không mô phỏng / yêu cầu chỉnh dữ liệu**, không bịa xác suất thắng.
-- Xử lý chiến thuật ở luồng nền, giữ nguyên HUD nhỏ và bản ghi lịch sử từ trái sang phải.
-- Chạy thêm các bài test Java trước build APK trên GitHub Actions.
+- **Chế độ chơi lưu trong app:** `Xếp hạng 1–2–3–4` (mặc định) hoặc `Ưu tiên về nhất`. Các điểm số chỉ là **heuristic**, chưa có bảng tiền/phạt chính thức và không phải xác suất thắng.
+- **Tự đọc đủ 13 lá bài tay** trong quạt bài sau khi chia trên bố cục ngang 2048×942 được chuẩn hóa từ ảnh mẫu. Cần thấy đủ 13 lá, chất và số rõ ràng, cùng một kết quả ổn định qua **3 khung hình**. Không tự điền quân khi bị che, đang di chuyển hoặc chỉ còn một phần tay bài.
+- **Khu vực ngay trên bài của bạn:** riêng `Tôi (n)` hiển thị những lá đang cầm, `Khác` ghi bài đã đánh mà chưa xác định được người, `Chưa đánh` hiển thị các lá chưa ghi nhận ra bàn. Không trộn bài trên tay vào bài đã đánh.
+- Nếu bạn đánh một lá được nhận diện ở giữa bàn, ứng dụng **loại nó khỏi bài đang cầm**. Nhận diện sai/bỏ sót vẫn có thể khiến tay bài lệch; trước khi gợi ý, bạn nên đối chiếu dữ liệu.
+- Nút **Bài tay** ngay trên HUD cho phép sửa/quét lại thủ công mà không cần thoát game. Tay bài sửa thủ công được ưu tiên cho tới khi bắt đầu ván mới.
+- Nút **Gợi ý** chỉ hoạt động khi bạn bấm; khi có kết quả, popup **tự ẩn sau 5 giây**, không điều khiển hay chạm vào game.
+- Tự reset khi nhận đủ 13 lá của cả ba đối thủ trong nhiều khung hình sau khi ván trước có thay đổi, có nút ↻ reset thủ công.
+- Bài đối thủ được xếp lịch sử **cũ bên trái → mới bên phải**, không có nhãn P1/P2/P3.
+- Giữ cảnh báo màu đỏ khả năng tứ quý và xanh khả năng 3–4 đôi thông dựa trên những lá bài **không được xác định đang ở tay mình** và chưa thấy đánh.
 
-## Điểm chưa làm
+## Hạn chế cần biết
 
-- **Chưa huấn luyện mạng nơ-ron**, chưa đạt kỹ thuật ISMCTS hoàn chỉnh và chưa kiểm thử độ mạnh ở ván thật.
-- **Chưa nhận diện toàn bộ bài trên tay** tự động; bạn phải nhập lại **bài đang còn trên tay sau mỗi lượt**.
-- Bạn phải cập nhật thủ công **bộ bài đang cần chặn** hoặc xóa nội dung khi mở lượt.
-- Luật chặt heo đặc biệt và cách quy đổi tiền/phạt thực tế cần xác minh từ đúng phiên bản game; tính toán hiện là **proxy**, không đại diện tiền thắng thực tế.
-- Không dùng ảnh/quyền root/đọc tiến trình game. Mọi ảnh xử lý trong thiết bị.
+1. **Chỉ nhận bài tay tự động khi toàn bộ quạt 13 lá xuất hiện rõ**, đúng giao diện/mức phóng to và bố cục mẫu. Nếu bắt đầu theo dõi muộn khi trên tay còn dưới 13 lá, cần bấm **Bài tay** để sửa.
+2. Quá trình nhận diện **được hiệu chỉnh trên vài ảnh và video do người dùng cung cấp**. Chưa có kiểm thử độc lập đủ lớn hoặc thử máy Xiaomi/Android 16 thực tế với phiên bản mới.
+3. Bộ chiến thuật hiện là **Monte Carlo 192 cách chia bài** (chỉ khi trạng thái bộ 52 lá nhất quán), kết hợp quy tắc và điểm ước lượng. **Chưa phải mô hình AI được huấn luyện**; không khẳng định kết quả thắng hoặc đúng luật phòng đặc thù.
+4. `Bài đang cần chặn` có thể cần nhập/sửa thủ công trong Tracker. Khi dữ liệu không rõ, ứng dụng không thể bảo đảm gợi ý hợp lệ.
+5. Tính năng hỗ trợ trong khi chơi có thể bị giới hạn bởi quy định của game. Ứng dụng chỉ đọc nội dung hiển thị khi bạn cấp quyền, không can thiệp vào game hoặc thực hiện lượt đánh.
 
-## Build bằng GitHub Actions
+## Cách build
 
-1. Giải nén thư mục gốc, bao gồm `.github/workflows/build-apk.yml`, `app/`, `build.gradle`, `settings.gradle`.
-2. Tải lên repository GitHub (Private được). Không đặt trùng thư mục gốc.
-3. Tab **Actions** → **Build Chặt Heo Tracker APK** → **Run workflow**.
-4. Khi tất cả bước xanh, tải Artifacts **ChatHeoTracker-v1.1-monte-carlo-preview-apk** và giải nén lấy `app-debug.apk`.
-5. Nếu lỗi build, gửi **log cụ thể**; không nên tiếp tục dùng APK khi có lỗi nhận diện bài.
+1. Tải đầy đủ thư mục gốc lên GitHub, bao gồm `.github/workflows/build-apk.yml`.
+2. Vào **Actions → Build Chặt Heo Tracker APK → Run workflow**.
+3. Chờ tất cả bước xanh rồi tải artifact `ChatHeoTracker-v1.2-auto-hand-ai-5s-apk`.
+4. Giải nén, cài `app-debug.apk` lên thiết bị và cấp quyền cửa sổ nổi, ghi màn hình.
 
-Không cần Gradle Wrapper cho GitHub: workflow cài Gradle 8.9 bằng `gradle/actions/setup-gradle`.
-
-## Gợi ý thời điểm test
-
-- Mở Tracker nhập bài **hiện còn**, cấp quyền ghi màn hình và overlay rồi vào ván.
-- Chọn đúng bài **cần chặn**, hoặc xóa nếu bạn đang mở lượt.
-- Chỉ bấm `Gợi ý` khi muốn xem đề xuất. Nếu thiếu bài công khai hoặc số bài không khớp sẽ báo chưa mô phỏng.
-- Đo hiệu suất: độ trễ thực tế trên Xiaomi, số quân đã nhận so với nhìn bằng mắt, các đề xuất có đúng luật Chặt Heo bạn đang chơi hay không.
-
-Bản v1.1 là **mã nguồn để bạn build**, không phải APK đã biên dịch trong môi trường này.
+**Tình trạng:** Kiểm thử Java phần chiến thuật, cảnh báo, lịch sử và xác nhận nhiều khung hình đã chạy. Có đối chiếu bộ nhận diện bài tay với các khung hình mẫu. Chưa biên dịch được APK trong môi trường này vì không có Android SDK hoặc kết nối tải SDK; cần chạy workflow để xác minh biên dịch Android.

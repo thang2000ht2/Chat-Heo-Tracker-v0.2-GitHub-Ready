@@ -41,14 +41,24 @@ public final class CaptureService extends Service {
     private final View[] panels=new View[4];
     private final WindowManager.LayoutParams[] panelParams=new WindowManager.LayoutParams[4];
     private final TextView[] playerRows=new TextView[3];
-    private TextView otherRow, remainingRow, status;
+    private TextView handRow, otherRow, remainingRow, status;
     // Only this small top-left window accepts touches. Card HUD windows are pass-through.
-    private TextView resetButton, suggestButton, suggestionText;
-    private WindowManager.LayoutParams resetButtonParams, suggestButtonParams, suggestionPanelParams;
-    private View suggestionPanel;
+    private TextView resetButton, suggestButton, handButton, suggestionText, handCount;
+    private WindowManager.LayoutParams resetButtonParams, suggestButtonParams, handButtonParams,
+        suggestionPanelParams, handEditorParams;
+    private View suggestionPanel, handEditor;
+    private final LinkedHashSet<String> draftHand=new LinkedHashSet<>();
+    private final LinkedHashMap<String,TextView> handCells=new LinkedHashMap<>();
     private Runnable dismissSuggestion;
     private CardRecognizer recognizer;
     private CountRecognizer countRecognizer;
+    private HandRecognizer handRecognizer;
+    private final LinkedHashSet<String> handCards=new LinkedHashSet<>();
+    private final LinkedHashSet<String> myPlayed=new LinkedHashSet<>();
+    private String handPending="";
+    private int handPendingFrames=0;
+    private boolean manualHandOverride=false;
+
     private final Object stateLock=new Object();
     private long lastScanned=0;
     // Each card is confirmed independently: an icon/chat box can temporarily hide
@@ -126,7 +136,17 @@ public final class CaptureService extends Service {
     }
     private void startScreenCapture(int code,Intent data){
         recognizer=new CardRecognizer(this);
+        // Restore explicitly edited hand only. Previous automatic scans may be stale.
+        android.content.SharedPreferences pref=getSharedPreferences("tracker_strategy",MODE_PRIVATE);
+        String savedSource=pref.getString("hand_source", "");
+        if("manual".equals(savedSource)){
+            StrategyAdvisor.Input previously=StrategyAdvisor.parse(pref.getString("hand",""));
+            if(previously.error==null){
+                synchronized(stateLock){handCards.addAll(previously.cards);manualHandOverride=true;}
+            }
+        }else pref.edit().remove("hand").remove("hand_source").apply();
         countRecognizer=new CountRecognizer(this);
+        handRecognizer=new HandRecognizer(this);
         wm=(WindowManager)getSystemService(Context.WINDOW_SERVICE);
         createPanel();
         worker=new HandlerThread("CardScan");worker.start();workerHandler=new Handler(worker.getLooper());
@@ -183,12 +203,60 @@ public final class CaptureService extends Service {
             if(normalized!=cropped)cropped.recycle();
             List<String> cards=recognizer.recognize(normalized);
             int[] counts=countRecognizer.read(normalized);
+            // The local fan is a separate source from the center-table detector.
+            HandRecognizer.Result myCards=handRecognizer.recognizeFullHand(normalized);
             normalized.recycle();
             boolean changed;
-            synchronized(stateLock){changed=handleFrame(cards,counts,now);}
+            synchronized(stateLock){
+                changed=handleFrame(cards,counts,now);
+                if(handleHandFrame(myCards))changed=true;
+            }
             if(changed)mainHandler.post(this::refresh);
         }catch(Exception e){android.util.Log.w("Tracker","Frame scan error",e);}
         finally {if(image!=null)image.close();}
+    }
+    /** Accept only a complete, stable, 13-card fan; never count partial guesses as a hand.
+     * A manual correction takes precedence until the next reset/deal.
+     */
+    private boolean handleHandFrame(HandRecognizer.Result result){
+        if(!result.complete || manualHandOverride || !handCards.isEmpty()){
+            handPending="";handPendingFrames=0;return false;
+        }
+        // If cards have been played already, seeing 13 may be an unrelated transition:
+        // only acquire a fresh hand before the local player has played anything.
+        if(!myPlayed.isEmpty())return false;
+        LinkedHashSet<String> stable=new LinkedHashSet<>(result.cards);
+        if(stable.size()!=13)return false;
+        for(String c:stable)if(played.contains(c))return false;
+        ArrayList<String> sorted=new ArrayList<>(stable);
+        sorted.sort((a,b)->{
+            int r=MonteCarloAdvisor.rank(a)-MonteCarloAdvisor.rank(b);
+            return r!=0?r:MonteCarloAdvisor.suit(a)-MonteCarloAdvisor.suit(b);
+        });
+        String signature=android.text.TextUtils.join(" ",sorted);
+        if(signature.equals(handPending))handPendingFrames++;
+        else{handPending=signature;handPendingFrames=1;}
+        if(handPendingFrames<3)return false;
+        handCards.addAll(sorted);
+        getSharedPreferences("tracker_strategy",MODE_PRIVATE).edit().putString("hand",signature).putString("hand_source","auto").apply();
+        return true;
+    }
+    private void updateHandAfterPlay(Collection<String> cards){
+        if(handCards.isEmpty())return;
+        boolean changed=false;
+        for(String c:cards){
+            if(handCards.remove(c)){
+                myPlayed.add(c);
+                otherPlayed.remove(c);otherHistory.remove(c);
+                changed=true;
+            }
+        }
+        if(changed)persistCurrentHand();
+    }
+    private void persistCurrentHand(){
+        // Keep an empty value at the end of a hand. Never regenerate cards after they are spent.
+        getSharedPreferences("tracker_strategy",MODE_PRIVATE).edit()
+            .putString("hand",android.text.TextUtils.join(" ",handCards)).apply();
     }
     /** On the worker thread. A counter drop, not turn rotation, identifies the actor. */
     private boolean handleFrame(List<String> visible,int[] counts,long now){
@@ -292,6 +360,7 @@ public final class CaptureService extends Service {
                     accepted.add(card);
                 }
                 otherHistory.record(accepted);
+                updateHandAfterPlay(accepted);
                 waitingCards.removeAll(move.cards);
                 cardMoves.remove(m);changed=true;
             }else m++;
@@ -307,6 +376,8 @@ public final class CaptureService extends Service {
     }
     private void resetRoundInternal(){
         played.clear();otherPlayed.clear();waitingCards.clear();cardMoves.clear();countDrops.clear();
+        handCards.clear();myPlayed.clear();handPending="";handPendingFrames=0;
+        manualHandOverride=false;
         for(LinkedHashSet<String> cards:byPlayer)cards.clear();
         for(RecentMoves history:playerHistory)history.clear();
         otherHistory.clear();
@@ -314,9 +385,11 @@ public final class CaptureService extends Service {
         Arrays.fill(candidateFrames,0);Arrays.fill(missingCards,0);
         recentCards.clear();sawAnyLowerCounter=false;
         newDealStableFrames=0;
-        getSharedPreferences("tracker_strategy",MODE_PRIVATE).edit().remove("hand").remove("table").apply();
+        getSharedPreferences("tracker_strategy",MODE_PRIVATE).edit().remove("hand").remove("table").remove("hand_source").apply();
         mainHandler.post(()->{
             if(suggestionPanel!=null)suggestionPanel.setVisibility(View.GONE);
+            if(handEditor!=null)handEditor.setVisibility(View.GONE);
+            draftHand.clear();
         });
     }
     private void manualReset(){
@@ -382,6 +455,8 @@ public final class CaptureService extends Service {
         // Keep only data-bearing rows. Unseen ranks already include the total count.
         LinearLayout bottom=newPanel();
         bottom.setPadding(dp(5),dp(3),dp(5),dp(3));
+        handRow=newCardText(10f);
+        bottom.addView(handRow);
         otherRow=newCardText(10f);
         bottom.addView(otherRow);
         remainingRow=newCardText(10f);
@@ -409,6 +484,7 @@ public final class CaptureService extends Service {
         }
         createResetButton();
         createSuggestControls();
+        createHandControls();
         refresh();
     }
     /** The top-left reset control is its own tiny touch target; HUD remains pass-through. */
@@ -482,13 +558,147 @@ public final class CaptureService extends Service {
         placeSuggestionControls();
         wm.updateViewLayout(suggestionPanel,suggestionPanelParams);
     }
+    /** Editable 52-card selector, available without leaving the game.
+     * The 13-by-4 grid appears only while editing and is dismissed afterwards. */
+    private void createHandControls(){
+        handButton=new TextView(this);
+        handButton.setText("Bài tay");
+        handButton.setContentDescription("Chọn bài tay trong khi chơi");
+        handButton.setGravity(Gravity.CENTER);
+        handButton.setTextColor(0xffffffff);
+        handButton.setTextSize(13f);
+        handButton.setTypeface(android.graphics.Typeface.DEFAULT,android.graphics.Typeface.BOLD);
+        android.graphics.drawable.GradientDrawable bg=new android.graphics.drawable.GradientDrawable();
+        bg.setColor(0xee303b51);bg.setCornerRadius(dp(10));
+        bg.setStroke(dp(1),0xffb6c8e6);
+        handButton.setBackground(bg);
+        handButtonParams=new WindowManager.LayoutParams(dp(69),dp(42),
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                |WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                |WindowManager.LayoutParams.FLAG_SECURE,
+            PixelFormat.TRANSLUCENT);
+        handButtonParams.gravity=Gravity.TOP|Gravity.LEFT;
+        handButtonParams.x=dp(119);handButtonParams.y=dp(6);
+        handButton.setOnClickListener(v->toggleHandEditor());
+        wm.addView(handButton,handButtonParams);
+
+        LinearLayout editor=newPanel();
+        editor.setPadding(dp(7),dp(5),dp(7),dp(6));
+        handCount=newCardText(14f);
+        handCount.setTypeface(android.graphics.Typeface.DEFAULT,android.graphics.Typeface.BOLD);
+        editor.addView(handCount);
+        TextView hint=newCardText(10f);
+        hint.setText("Chạm để chọn/bỏ lá đang cầm. Tối đa 13 lá.");
+        editor.addView(hint);
+        GridLayout grid=new GridLayout(this);
+        grid.setColumnCount(13);
+        for(String suit:MonteCarloAdvisor.SUITS){
+            for(String rank:MonteCarloAdvisor.RANKS){
+                String card=rank+suit;
+                TextView cell=new TextView(this);
+                cell.setText(rank+suitSymbol(suit));
+                cell.setTextSize(rank.equals("10")?10f:11f);
+                cell.setTypeface(android.graphics.Typeface.DEFAULT,android.graphics.Typeface.BOLD);
+                cell.setGravity(Gravity.CENTER);
+                cell.setPadding(0,0,0,0);
+                GridLayout.LayoutParams cp=new GridLayout.LayoutParams();
+                cp.width=dp(33);cp.height=dp(30);
+                cp.setMargins(dp(1),dp(1),dp(1),dp(1));
+                grid.addView(cell,cp);
+                handCells.put(card,cell);
+                cell.setOnClickListener(v->{
+                    if(draftHand.contains(card))draftHand.remove(card);
+                    else if(draftHand.size()<13)draftHand.add(card);
+                    else Toast.makeText(this,"Tối đa 13 lá",Toast.LENGTH_SHORT).show();
+                    renderHandEditor();
+                });
+            }
+        }
+        editor.addView(grid);
+        LinearLayout actions=new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        TextView clear=editorAction("Xóa chọn");
+        clear.setOnClickListener(v->{draftHand.clear();renderHandEditor();});
+        TextView close=editorAction("Đóng");
+        close.setOnClickListener(v->handEditor.setVisibility(View.GONE));
+        TextView save=editorAction("Lưu bài tay");
+        save.setOnClickListener(v->saveHandEditor());
+        actions.addView(clear);actions.addView(close);actions.addView(save);
+        editor.addView(actions);
+        handEditor=editor;
+        handEditor.setVisibility(View.GONE);
+        handEditorParams=new WindowManager.LayoutParams(dp(470),WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE|WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                |WindowManager.LayoutParams.FLAG_SECURE,
+            PixelFormat.TRANSLUCENT);
+        handEditorParams.gravity=Gravity.TOP|Gravity.LEFT;
+        handEditorParams.x=dp(5);handEditorParams.y=dp(53);
+        wm.addView(handEditor,handEditorParams);
+    }
+    private TextView editorAction(String title){
+        TextView v=newCardText(12f);
+        v.setText(title);
+        v.setTextColor(0xffffffff);
+        v.setTypeface(android.graphics.Typeface.DEFAULT,android.graphics.Typeface.BOLD);
+        v.setPadding(dp(12),dp(7),dp(12),dp(7));
+        v.setGravity(Gravity.CENTER);
+        return v;
+    }
+    private void toggleHandEditor(){
+        if(handEditor==null)return;
+        if(handEditor.getVisibility()==View.VISIBLE){handEditor.setVisibility(View.GONE);return;}
+        draftHand.clear();
+        StrategyAdvisor.Input parsed=StrategyAdvisor.parse(
+            getSharedPreferences("tracker_strategy",MODE_PRIVATE).getString("hand",""));
+        if(parsed.error==null)draftHand.addAll(parsed.cards);
+        if(suggestionPanel!=null)suggestionPanel.setVisibility(View.GONE);
+        renderHandEditor();
+        handEditor.setVisibility(View.VISIBLE);
+    }
+    private void renderHandEditor(){
+        if(handCount==null)return;
+        handCount.setText("BÀI TAY  "+draftHand.size()+"/13");
+        for(Map.Entry<String,TextView> entry:handCells.entrySet()){
+            boolean selected=draftHand.contains(entry.getKey());
+            TextView cell=entry.getValue();
+            android.graphics.drawable.GradientDrawable shape=new android.graphics.drawable.GradientDrawable();
+            shape.setColor(selected?0xff1e7550:0xff222c3e);
+            shape.setCornerRadius(dp(4));
+            shape.setStroke(dp(1),selected?0xff9df1be:0xff49556a);
+            cell.setBackground(shape);
+            boolean red=entry.getKey().endsWith("H")||entry.getKey().endsWith("D");
+            cell.setTextColor(selected?0xffffffff:(red?0xffff9999:0xffe9eef6));
+        }
+    }
+    private void saveHandEditor(){
+        if(draftHand.isEmpty()){
+            Toast.makeText(this,"Chưa chọn lá nào",Toast.LENGTH_SHORT).show();return;
+        }
+        // Cards are sorted for compact, stable persistence; mode/table settings remain unchanged.
+        ArrayList<String> sorted=new ArrayList<>(draftHand);
+        sorted.sort((a,b)->{int r=MonteCarloAdvisor.rank(a)-MonteCarloAdvisor.rank(b);
+            return r!=0?r:MonteCarloAdvisor.suit(a)-MonteCarloAdvisor.suit(b);});
+        synchronized(stateLock){
+            handCards.clear();handCards.addAll(sorted);
+            manualHandOverride=true;
+            getSharedPreferences("tracker_strategy",MODE_PRIVATE).edit().putString("hand_source","manual").apply();
+            persistCurrentHand();
+        }
+        refresh();
+        handEditor.setVisibility(View.GONE);
+        Toast.makeText(this,"Đã lưu "+sorted.size()+" lá. Bấm Gợi ý khi cần.",Toast.LENGTH_SHORT).show();
+    }
+
     private void onSuggestClick(){
         if(suggestionText==null||suggestionPanel==null)return;
         String raw=getSharedPreferences("tracker_strategy",MODE_PRIVATE).getString("hand", "");
         String tableRaw=getSharedPreferences("tracker_strategy",MODE_PRIVATE).getString("table", "");
         StrategyAdvisor.Input parsed=StrategyAdvisor.parse(raw);
         if(parsed.error!=null){
-            showAdvice(new MonteCarloAdvisor.Advice("Thiếu bài tay", "Mở Tracker để nhập các lá hiện còn trên tay."));
+            showAdvice(new MonteCarloAdvisor.Advice("Thiếu bài tay", "Bấm Bài tay ở góc trái để chọn những lá đang cầm."));
+            toggleHandEditor();
             return;
         }
         StrategyAdvisor.Input table=tableRaw.trim().isEmpty()?null:StrategyAdvisor.parse(tableRaw);
@@ -504,6 +714,9 @@ public final class CaptureService extends Service {
             counts=knownCounts.clone();
         }
         final Collection<String> lead=table==null?Collections.emptyList():new ArrayList<>(table.cards);
+        final StrategyMode mode=StrategyMode.fromKey(
+            getSharedPreferences("tracker_strategy",MODE_PRIVATE)
+                .getString("mode",StrategyMode.PLACEMENT.key));
         if(dismissSuggestion!=null)mainHandler.removeCallbacks(dismissSuggestion);
         suggestionText.setText("Đang phân tích các nước đánh và bài chưa biết…");
         suggestionPanel.setVisibility(View.VISIBLE);
@@ -517,7 +730,7 @@ public final class CaptureService extends Service {
         workerHandler.post(()->{
             MonteCarloAdvisor.Advice advice;
             try{
-                advice=MonteCarloAdvisor.advise(actualHand,lead,snapshotPlayed,counts);
+                advice=MonteCarloAdvisor.advise(actualHand,lead,snapshotPlayed,counts,mode);
             }catch(Exception err){
                 android.util.Log.e("Tracker","Advisor failed",err);
                 advice=new MonteCarloAdvisor.Advice("Chưa thể phân tích", "Dữ liệu ván hoặc bài tay chưa phù hợp. Hãy kiểm tra lại.");
@@ -535,7 +748,7 @@ public final class CaptureService extends Service {
         if(dismissSuggestion!=null)mainHandler.removeCallbacks(dismissSuggestion);
         suggestionPanel.setVisibility(View.VISIBLE);
         dismissSuggestion=()->{if(suggestionPanel!=null)suggestionPanel.setVisibility(View.GONE);};
-        mainHandler.postDelayed(dismissSuggestion,16000);
+        mainHandler.postDelayed(dismissSuggestion,5000);
     }
     private void placeSuggestionControls(){
         if(wm==null)return;
@@ -566,6 +779,12 @@ public final class CaptureService extends Service {
         }
         placeSuggestionControls();
         if(suggestButton!=null&&suggestButtonParams!=null)try{wm.updateViewLayout(suggestButton,suggestButtonParams);}catch(Exception ignored){}
+        if(handButton!=null&&handButtonParams!=null)try{wm.updateViewLayout(handButton,handButtonParams);}catch(Exception ignored){}
+        if(handEditor!=null&&handEditorParams!=null){
+            handEditorParams.x=dp(5);
+            handEditorParams.y=dp(53);
+            try{wm.updateViewLayout(handEditor,handEditorParams);}catch(Exception ignored){}
+        }
         if(suggestionPanel!=null&&suggestionPanelParams!=null)try{wm.updateViewLayout(suggestionPanel,suggestionPanelParams);}catch(Exception ignored){}
     }
     private void sizeOverlayFonts(int w,int h){
@@ -574,6 +793,7 @@ public final class CaptureService extends Service {
             if(playerRows[i]!=null)playerRows[i].setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(18f,side*.021f));
         }
         if(status!=null)status.setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(13f,side*.015f));
+        if(handRow!=null)handRow.setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(16f,side*.018f));
         if(otherRow!=null)otherRow.setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(16f,side*.018f));
         if(remainingRow!=null)remainingRow.setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(17f,side*.019f));
     }
@@ -592,7 +812,7 @@ public final class CaptureService extends Service {
             int minWidth=(i==3)?dp(114):dp(40);
             int needed;
             if(i<3)needed=desiredWidth(playerRows[i]);
-            else needed=Math.max(desiredWidth(remainingRow),Math.max(desiredWidth(otherRow),desiredWidth(status)));
+            else needed=Math.max(desiredWidth(remainingRow),Math.max(desiredWidth(handRow),Math.max(desiredWidth(otherRow),desiredWidth(status))));
             // The reset control occupies its own window, not HUD content.
             p.width=Math.min(maxWidth,Math.max(minWidth,needed+dp(20)));
             p.height=WindowManager.LayoutParams.WRAP_CONTENT;
@@ -627,13 +847,32 @@ public final class CaptureService extends Service {
                 if(playerRows[i]!=null)playerRows[i].setText(recentPlaySpans(playerHistory[i]));
                 if(p!=null)p.setVisibility(n>0?View.VISIBLE:View.GONE);
             }
+            if(handCards.isEmpty())handRow.setVisibility(View.GONE);
+            else{
+                handRow.setVisibility(View.VISIBLE);
+                // Compact grouped rank display: 6♠♥ instead of 6♠ 6♥.
+                StringBuilder mine=new StringBuilder("Tôi (").append(handCards.size()).append("): ");
+                String[] suits={"S","C","D","H"};
+                for(String rank:CardWarnings.RANKS){
+                    StringBuilder group=new StringBuilder(rank);
+                    int n=0;
+                    for(String suit:suits)if(handCards.contains(rank+suit)){
+                        group.append(suitSymbol(suit));n++;
+                    }
+                    if(n>0)mine.append(group).append("  ");
+                }
+                handRow.setText(mine.toString());
+            }
             if(otherPlayed.isEmpty())otherRow.setVisibility(View.GONE);
             else{
                 otherRow.setVisibility(View.VISIBLE);
                 otherRow.setText(recentPlaySpans(otherHistory, "Khác  "));
             }
             List<String> remaining=remainingCards();
-            remainingRow.setText(buildRemainingSpans(remaining));
+            // Risk colors must use cards opponents COULD hold, not my known cards.
+            ArrayList<String> unknown=new ArrayList<>(remaining);
+            unknown.removeAll(handCards);
+            remainingRow.setText(buildRemainingSpans(remaining,unknown));
             int missing=missingCards[0]+missingCards[1]+missingCards[2];
             if(missing>0 || !waitingCards.isEmpty()){
                 StringBuilder info=new StringBuilder();
@@ -678,8 +917,8 @@ public final class CaptureService extends Service {
      * This is a *possibility across the unobserved pool*, NOT proof that
      * one opponent actually holds the full combination.
      */
-    private CharSequence buildRemainingSpans(Collection<String> remaining){
-        CardWarnings.Result warnings=CardWarnings.analyze(remaining);
+    private CharSequence buildRemainingSpans(Collection<String> remaining,Collection<String> unknown){
+        CardWarnings.Result warnings=CardWarnings.analyze(unknown);
         HashSet<String> unseen=new HashSet<>(remaining);
         SpannableStringBuilder sb=new SpannableStringBuilder();
         sb.append("Chưa đánh (").append(String.valueOf(remaining.size())).append("): ");
@@ -696,14 +935,15 @@ public final class CaptureService extends Service {
         String[] suits={"S","C","D","H"};
         for(int i=0;i<ranks.length;i++){
             String rank=ranks[i];
-            int count=warnings.remainingByRank[i];
+            int count=0;
+            for(String suit:suits)if(unseen.contains(rank+suit))count++;
             if(count==0)continue;
             int start=sb.length();
             sb.append(rank);
             for(String suit:suits){
                 if(unseen.contains(rank+suit))sb.append(suitSymbol(suit));
             }
-            if(count==4){
+            if(count==4 && warnings.remainingByRank[i]==4){
                 sb.setSpan(new ForegroundColorSpan(0xffff8585),start,sb.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
                 sb.setSpan(new BackgroundColorSpan(0xff49242c),start,sb.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
                 sb.setSpan(new StyleSpan(android.graphics.Typeface.BOLD),start,sb.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
@@ -759,9 +999,13 @@ public final class CaptureService extends Service {
         if(dismissSuggestion!=null)mainHandler.removeCallbacks(dismissSuggestion);
         if(wm!=null&&suggestButton!=null)try{wm.removeView(suggestButton);}catch(Exception ignored){}
         if(wm!=null&&suggestionPanel!=null)try{wm.removeView(suggestionPanel);}catch(Exception ignored){}
+        if(wm!=null&&handButton!=null)try{wm.removeView(handButton);}catch(Exception ignored){}
+        if(wm!=null&&handEditor!=null)try{wm.removeView(handEditor);}catch(Exception ignored){}
+        handButton=null;handEditor=null;handCount=null;handCells.clear();draftHand.clear();
+        handButtonParams=null;handEditorParams=null;
         suggestButton=null;suggestButtonParams=null; suggestionText=null;suggestionPanel=null;suggestionPanelParams=null;
         Arrays.fill(playerRows,null);
-        otherRow=null;remainingRow=null;status=null;
+        handRow=null;otherRow=null;remainingRow=null;status=null;
         super.onDestroy();
     }
     @Override public android.os.IBinder onBind(Intent i){return null;}

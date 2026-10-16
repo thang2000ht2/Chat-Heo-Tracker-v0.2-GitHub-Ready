@@ -14,6 +14,7 @@ import android.view.View;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ArrayAdapter;
+import android.widget.AdapterView;
 import android.widget.Spinner;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -47,7 +48,24 @@ public final class MainActivity extends Activity {
             state.setText("Đã yêu cầu làm mới bộ bài");
         }));
         root.addView(text("Lịch sử đối thủ: từ TRÁI sang PHẢI theo thời gian. Lượt mới nhất nằm bên phải, tô vàng. Không hiển thị nhãn P1/P2/P3.\n\nNút ↻ đặt lại bộ đếm. Nút Gợi ý chỉ phân tích khi bấm, không tự chọn hoặc đánh bài.",14,0xffdddddd));
-        root.addView(text("GỢI Ý MONTE CARLO (cần bài tay hiện tại):",17,Color.WHITE));
+        root.addView(text("CHẾ ĐỘ CHƠI",17,Color.WHITE));
+        Spinner gameMode=new Spinner(this);
+        final String[] modes={StrategyMode.PLACEMENT.label,StrategyMode.FIRST.label};
+        gameMode.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,modes));
+        String savedMode=getSharedPreferences("tracker_strategy",MODE_PRIVATE)
+            .getString("mode",StrategyMode.PLACEMENT.key);
+        gameMode.setSelection(StrategyMode.fromKey(savedMode)==StrategyMode.FIRST?1:0);
+        gameMode.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){
+            @Override public void onItemSelected(AdapterView<?> parent,View view,int position,long id){
+                StrategyMode chosen=position==1?StrategyMode.FIRST:StrategyMode.PLACEMENT;
+                getSharedPreferences("tracker_strategy",MODE_PRIVATE).edit()
+                    .putString("mode",chosen.key).apply();
+            }
+            @Override public void onNothingSelected(AdapterView<?> parent){}
+        });
+        root.addView(gameMode);
+        root.addView(text("Xếp hạng 1–2–3–4: coi trọng vị trí về và tránh giữ nhiều bài khi đối thủ sắp hết. Về nhất: ưu tiên con đường về đầu tiên. Đây là điểm số ước lượng, chưa mô phỏng đầy đủ tiền thưởng/phạt hoặc xác suất hạng.",13,0xffbac4d2));
+        root.addView(text("BÀI TAY HIỆN TẠI (cũng có thể bấm Bài tay ngay trong game):",17,Color.WHITE));
         EditText hand=new EditText(this);
         hand.setTextColor(Color.WHITE);hand.setHintTextColor(0xffa9b4c6);
         hand.setHint("Ví dụ: 4♦ 6♠ 6♥ 7♣ 8♣ A♠ 2♥");
@@ -70,10 +88,11 @@ public final class MainActivity extends Activity {
             }
             getSharedPreferences("tracker_strategy",MODE_PRIVATE).edit()
                 .putString("hand",hand.getText().toString().trim())
+                .putString("hand_source","manual")
                 .putString("table",table.getText().toString().trim()).apply();
             state.setText("Đã lưu. Vào game, bấm Gợi ý ở góc trái khi cần.");
         }));
-        root.addView(text("Mỗi lần bấm Gợi ý, app tính cách đi hết bài với ít lượt nhất và (chỉ khi 3 bộ đếm hợp lệ) thử 192 cách phân chia bài úp. Cân bằng khả năng về trước với rủi ro bị chặt/mất quyền đánh bằng điểm ước lượng; không phải xác suất thắng hay mức tiền lời thực tế.\n\nBẮT BUỘC nhập CHÍNH XÁC những lá đang còn trên tay mỗi khi bài thay đổi. Nếu có lá chưa được Tracker ghi nhận, hãy bổ sung hoặc Reset khi ván mới.\n\nQuy tắc chặt heo và tiền phạt tùy phòng/game chưa được xác thực, app tránh khuyên nước chặt đặc biệt.",13,0xffbac4d2));
+        root.addView(text("Khi đang chơi, bạn có thể bấm Bài tay trên lớp phủ để chọn lại quân, không phải thoát game. Mỗi lần bấm Gợi ý, app tính cách đi hết bài với ít lượt nhất và (chỉ khi 3 bộ đếm hợp lệ) thử 192 cách phân chia bài úp. Cân bằng khả năng về trước với rủi ro bị chặt/mất quyền đánh bằng điểm ước lượng; không phải xác suất thắng hay mức tiền lời thực tế.\n\nTracker thử tự đọc đủ 13 lá ngay khi thấy tay bài sau khi chia; chỉ chấp nhận kết quả ổn định qua 3 khung hình. Ô Tôi hiển thị bài đang cầm; nếu bị che hoặc nhận diện thiếu, dùng nút Bài tay để kiểm tra/sửa trước khi bấm Gợi ý. Tính năng tự động vẫn cần thử thực tế trên điện thoại.\n\nQuy tắc chặt heo và tiền phạt tùy phòng/game chưa được xác thực, app tránh khuyên nước chặt đặc biệt.",13,0xffbac4d2));
         root.addView(text("Quyền riêng tư: xử lý hình ảnh trên thiết bị, không truy cập Internet.\nĐể quét cả bàn, chọn 'Toàn bộ màn hình' khi cấp quyền ghi màn hình.",13,0xffbdbdbd));
         ScrollView outer=new ScrollView(this);outer.addView(root);setContentView(outer);
     }

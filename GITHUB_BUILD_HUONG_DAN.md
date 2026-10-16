@@ -1,21 +1,18 @@
-# GitHub Actions — v1.1 Monte Carlo Strategy
+# GitHub Actions — Chặt Heo Tracker v1.2
 
-1. Giải nén ZIP v1.1, tải **toàn bộ nội dung** lên repository GitHub; cần giữ `.github/workflows/build-apk.yml` đúng đường dẫn và **thay thế file cũ**, không lồng một thư mục mới.
-2. Vào **Actions** → **Build Chặt Heo Tracker APK** → **Run workflow**.
-3. GitHub lần lượt chạy kiểm thử Java, cài Android SDK và build. Khi tất cả đều xanh, tải artifact **ChatHeoTracker-v1.1-monte-carlo-preview-apk**.
-4. Giải nén artifact lấy `app-debug.apk`, cài thử trên Xiaomi 17 Pro Max. Nếu bị xung đột chữ ký, kiểm tra bạn đang cài trên app đã được ký khác; nên sao lưu dữ liệu trước khi gỡ bản cũ.
+1. Giải nén toàn bộ ZIP, mở repository GitHub của bạn và cập nhật **các file bên trong ZIP** vào thư mục gốc (không tạo một thư mục con nữa).
+2. Kiểm tra có `.github/workflows/build-apk.yml` và `app/src/main/java/vn/chatheotracker/HandRecognizer.java`.
+3. Vào **Actions → Build Chặt Heo Tracker APK → Run workflow**.
+4. Workflow cài JDK 17, Android SDK 35, Gradle 8.9, chạy kiểm thử Java rồi `assembleDebug`.
+5. Nếu xanh hoàn toàn, tải artifact `ChatHeoTracker-v1.2-auto-hand-ai-5s-apk` và giải nén lấy `app-debug.apk`.
 
-## Cách dùng Gợi ý
+**Thử nghiệm:**
+- Vào phòng ván mới, bật ghi màn hình toàn màn hình; khi đủ 13 quân, kiểm tra dòng `Tôi (13)`.
+- Nếu không xuất hiện, bấm `Bài tay` chọn/sửa 13 quân. Đừng dùng gợi ý với dữ liệu thiếu hoặc sai.
+- Chọn chế độ `Xếp hạng 1–2–3–4` hoặc `Ưu tiên về nhất` trong ứng dụng.
+- Khi bấm `Gợi ý`, bảng phân tích sẽ tự biến mất sau **5 giây kể từ khi có kết quả**.
+- Giữ chức năng Reset trong góc trái và kiểm tra reset tự động khi các đối thủ trở lại 13.
 
-- Mở Tracker, nhập **toàn bộ bài còn trên tay hiện tại**, lưu lại.
-- Khi cần đè một bộ trên bàn, nhập lá tương ứng vào **Bài đang cần chặn**, lưu lại; để trống khi bạn được quyền mở lượt.
-- Quay về game, bấm **Gợi ý** cạnh ↻ góc trái. App chạy xử lý trên luồng nền, hiển thị tối đa 3 lựa chọn và tự ẩn sau 16 giây.
-- Có đủ 3 số đếm đối thủ khớp 52 lá mới chạy 192 mẫu chia bài; thiếu dữ liệu thì chỉ phân tích bài tay và cảnh báo **chưa mô phỏng**.
+Nếu GitHub báo đỏ, lấy đoạn lỗi trong bước **Build debug APK**, không chỉ gửi ảnh trang đầu Actions.
 
-**Không có mô hình AI đã train trong ZIP**. Đây là baseline tìm nước kết hợp Monte Carlo; chưa có đánh giá xác suất thắng trên ván thật. Luật chặt và tiền phạt thực tế vẫn phải xác minh.
-
-Để train mô hình mạnh hơn, xem `AI_TRAINING_ROADMAP_VI.md`.
-
-Lịch sử đối thủ: **lượt cũ bên trái → lượt mới bên phải**, mới nhất tô vàng, không ghi P1/P2/P3.
-
-**Trạng thái xây dựng:** Java tests chạy được trong môi trường hiện tại; chưa biên dịch APK ở đây vì thiếu Android SDK và không có kết nối Internet để tải SDK. Quy trình GitHub cần được chạy thực tế.
+**Lưu ý:** Bản nguồn này chưa được xác minh là biên dịch thành công trên GitHub; không nên coi là APK hoàn thiện trước khi Actions chạy xanh và ứng dụng được kiểm thử trên điện thoại.
