@@ -6,8 +6,8 @@ android {
         applicationId 'vn.chatheotracker'
         minSdk 29
         targetSdk 35
-        versionCode 8
-        versionName '0.8-visibility-occlusion-warnings'
+        versionCode 9
+        versionName '0.9-recent-moves-compact-hud'
     }
     buildTypes { release { minifyEnabled false } }
     compileOptions {

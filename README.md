@@ -1,3 +1,24 @@
+# Chặt Heo Tracker v0.9 — lượt đánh gần đây, HUD gọn hơn
+
+### Thay đổi từ v0.8
+
+- **Bỏ chữ P1/P2/P3 trên cả ba ô nổi.** App vẫn tự theo dõi đối thủ theo vị trí: trên, trái và phải; ô thông tin nào đặt gần ai thì là bài người đó đã đánh.
+- **Hai ô bên trái và bên phải được dời lên cao** (khoảng 14,5% chiều cao màn hình thay vì 48,5%); ô người phía trên đặt ở khoảng 21,5%, giảm chiếm chỗ giữa bàn.
+- **Ưu tiên lượt mới nhất trước:** mỗi lượt đánh hiển thị thành một nhóm ngắn, ngăn giữa các lượt bằng `›`. Lượt gần nhất tô vàng nhạt, lượt trước màu sáng dịu. Không còn gom tất cả lá của một người rồi sắp theo 3..2.
+- **Gộp quân cùng số trong *một lượt*:** vd `K♠♥♣`, không lặp lại K; nhưng không gộp quân của hai lượt khác nhau để giữ trình tự đánh.
+- Ô **Khác** cũng hiển thị các lượt gần đây trước, không còn sắp theo rank. Ô **Chưa đánh** vẫn hiển thị đầy đủ tất cả các quân chưa ghi nhận theo thứ tự 3..2 để tiện tra cứu; giữ màu đỏ tứ quý và màu xanh đôi thông.
+- Vẫn giữ nút **↻ Reset** và tự reset khi xác nhận chia lại đủ 13 lá cho cả 3 đối thủ. Các ô HUD vẫn **không chặn thao tác chạm** và chừa vùng nút Hủy/Đánh.
+
+**Ví dụ:** một người lần lượt đánh `3♠ 4♥ 5♦`, `8♥ 8♠ 8♣`, `K♥ K♣ K♠` thì ô chỉ hiển thị `K♥♣♠  ›  8♥♠♣  ›  3♠ 4♥ 5♦` (mới nhất trước).
+
+**Giới hạn:** thứ tự các lượt dựa trên các lần được bộ nhận diện xác nhận. Nếu lá bị che hoàn toàn hoặc hai lượt diễn ra quá sát nhau, thứ tự nhóm có thể không chính xác. Chưa build/kiểm thử v0.9 trực tiếp trên máy Android trong môi trường này; kiểm tra các thuật toán Java thuần đạt 22 bài kiểm thử được liệt kê bên dưới.
+
+### Build bằng GitHub Actions
+
+Giải nén ZIP vào gốc repository, ghi đè mã nguồn cũ và giữ thư mục ẩn `.github`. Vào **Actions → Build Chặt Heo Tracker APK → Run workflow**. Khi thành công, tải artifact `ChatHeoTracker-v0.9-recent-moves-compact-hud-apk` chứa `app-debug.apk`.
+
+---
+
 # Chặt Heo Tracker v0.8 — cảnh báo đôi thông và nhận diện qua nhiều khung hình
 
 Nâng cấp từ v0.7; giữ nút Reset góc trái, tự reset ván, tự gán P1/P2/P3 theo số lá giảm, các HUD chạm xuyên qua và vùng nút Hủy/Đánh ở bên phải.

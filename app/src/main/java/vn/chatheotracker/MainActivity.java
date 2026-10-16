@@ -44,7 +44,7 @@ public final class MainActivity extends Activity {
             startService(it);
             state.setText("Đã yêu cầu làm mới bộ bài");
         }));
-        root.addView(text("Bố cục v0.7: có nút ↻ reset nhỏ ở góc trên bên trái màn hình, chạm để bắt đầu ván mới. P1/P2/P3 chỉ hiện khi đã có bài đánh; các bảng tự co theo nội dung.\n\nBạn/khác chỉ hiện khi có dữ liệu. Chưa đánh luôn thể hiện các lá chưa ghi nhận theo nhóm số, tự xuống dòng, không vuốt ngang. Đỏ = cả 4 chất của số đó chưa xuất hiện.\n\nỨng dụng tự phát hiện chia bài khi cả ba đối thủ cùng trở lại 13 lá ổn định trong nhiều khung hình và ván cũ đã có người đánh. Nút ↻ dùng khi cần đặt lại thủ công.",14,0xffdddddd));
+        root.addView(text("Bố cục v0.9: không hiển thị chữ P1/P2/P3. Ba bảng bài theo vị trí người chơi, hai bảng trái/phải được chuyển lên cao.\n\nCác bộ vừa đánh hiển thị mới nhất trước, theo lượt và ngăn cách bằng ›. Lượt mới nhất màu vàng. Danh sách 'Chưa đánh' giữ thứ tự 3 đến 2 để tiện tìm và giữ cảnh báo tứ quý / đôi thông.\n\nNút ↻ ở góc trái cho phép đặt lại; ứng dụng vẫn tự phát hiện chia ván mới khi đủ điều kiện.",14,0xffdddddd));
         root.addView(text("Quyền riêng tư: xử lý hình ảnh trên thiết bị, không truy cập Internet.\nĐể quét cả bàn, chọn 'Toàn bộ màn hình' khi cấp quyền ghi màn hình.",13,0xffbdbdbd));
         ScrollView outer=new ScrollView(this);outer.addView(root);setContentView(outer);
     }

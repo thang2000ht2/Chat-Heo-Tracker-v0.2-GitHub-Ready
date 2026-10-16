@@ -1,3 +1,5 @@
+# Bản v0.9: Actions xuất artifact `ChatHeoTracker-v0.9-recent-moves-compact-hud-apk`.
+
 # Bản mới v0.8: file `.github/workflows/build-apk.yml` tạo artifact `ChatHeoTracker-v0.8-visibility-occlusion-warnings-apk`.
 
 # Chặt Heo Tracker v0.7 — build trên GitHub Actions

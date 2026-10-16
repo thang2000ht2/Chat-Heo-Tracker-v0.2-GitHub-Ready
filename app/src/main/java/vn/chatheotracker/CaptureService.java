@@ -55,6 +55,9 @@ public final class CaptureService extends Service {
     private final LinkedHashSet<String> played=new LinkedHashSet<>();
     private final LinkedHashSet<String>[] byPlayer=new LinkedHashSet[]{new LinkedHashSet<>(),new LinkedHashSet<>(),new LinkedHashSet<>()};
     private final LinkedHashSet<String> otherPlayed=new LinkedHashSet<>();
+    // Play history is newest-first and grouped by actual observed move, not card rank.
+    private final RecentMoves[] playerHistory={new RecentMoves(),new RecentMoves(),new RecentMoves()};
+    private final RecentMoves otherHistory=new RecentMoves();
     private final LinkedHashSet<String> waitingCards=new LinkedHashSet<>();
     private final ArrayList<CardMove> cardMoves=new ArrayList<>();
     private final ArrayList<CountDrop> countDrops=new ArrayList<>();
@@ -79,10 +82,15 @@ public final class CaptureService extends Service {
             String c=intent.getStringExtra(EXTRA_CARD);
             if(c!=null&&!c.isEmpty())synchronized(stateLock){
                 if(ACTION_ADD.equals(action)){
-                    if(played.add(c))otherPlayed.add(c);
+                    if(played.add(c)){
+                        otherPlayed.add(c);
+                        otherHistory.record(Collections.singletonList(c));
+                    }
                 }else{
                     played.remove(c);otherPlayed.remove(c);waitingCards.remove(c);
                     for(LinkedHashSet<String> set:byPlayer)set.remove(c);
+                    for(RecentMoves h:playerHistory)h.remove(c);
+                    otherHistory.remove(c);
                 }
             }
             refresh();return START_NOT_STICKY;
@@ -263,7 +271,12 @@ public final class CaptureService extends Service {
             if(selected>=0 && (countDrops.get(selected).delta==move.cards.size()
                     || (now-move.time>=1000 && now-move.updated>=650))){
                 CountDrop drop=countDrops.remove(selected);
-                for(String card:move.cards)if(played.add(card))byPlayer[drop.player].add(card);
+                ArrayList<String> accepted=new ArrayList<>();
+                for(String card:move.cards)if(played.add(card)){
+                    byPlayer[drop.player].add(card);
+                    accepted.add(card);
+                }
+                playerHistory[drop.player].record(accepted);
                 if(drop.delta>move.cards.size())missingCards[drop.player]+=drop.delta-move.cards.size();
                 waitingCards.removeAll(move.cards);
                 cardMoves.remove(m);
@@ -271,7 +284,12 @@ public final class CaptureService extends Service {
             }else if(now-move.time>2600){
                 // This could be the user's own turn; without a visible count change,
                 // the app must NOT invent an opponent attribution.
-                for(String card:move.cards)if(played.add(card))otherPlayed.add(card);
+                ArrayList<String> accepted=new ArrayList<>();
+                for(String card:move.cards)if(played.add(card)){
+                    otherPlayed.add(card);
+                    accepted.add(card);
+                }
+                otherHistory.record(accepted);
                 waitingCards.removeAll(move.cards);
                 cardMoves.remove(m);changed=true;
             }else m++;
@@ -288,6 +306,8 @@ public final class CaptureService extends Service {
     private void resetRoundInternal(){
         played.clear();otherPlayed.clear();waitingCards.clear();cardMoves.clear();countDrops.clear();
         for(LinkedHashSet<String> cards:byPlayer)cards.clear();
+        for(RecentMoves history:playerHistory)history.clear();
+        otherHistory.clear();
         Arrays.fill(knownCounts,-1);Arrays.fill(lastCandidates,-1);
         Arrays.fill(candidateFrames,0);Arrays.fill(missingCards,0);
         recentCards.clear();sawAnyLowerCounter=false;
@@ -443,7 +463,7 @@ public final class CaptureService extends Service {
         for(int i=0;i<panels.length;i++){
             View v=panels[i];WindowManager.LayoutParams p=panelParams[i];
             if(v==null||p==null)continue;
-            int maxWidth=landscape?(int)(width*(i==3?.575f:.285f)):(int)(width*.94f);
+            int maxWidth=landscape?(int)(width*(i==3?.575f:.275f)):(int)(width*.94f);
             int minWidth=(i==3)?dp(114):dp(40);
             int needed;
             if(i<3)needed=desiredWidth(playerRows[i]);
@@ -452,9 +472,10 @@ public final class CaptureService extends Service {
             p.width=Math.min(maxWidth,Math.max(minWidth,needed+dp(20)));
             p.height=WindowManager.LayoutParams.WRAP_CONTENT;
             if(landscape){
-                if(i==0){p.x=(width-p.width)/2;p.y=(int)(height*.255f);}
-                else if(i==1){p.x=(int)(width*.012f);p.y=(int)(height*.485f);}
-                else if(i==2){p.x=width-p.width-(int)(width*.012f);p.y=(int)(height*.485f);}
+                if(i==0){p.x=(width-p.width)/2;p.y=(int)(height*.215f);}
+                // Side players sit ABOVE their avatars/card counters to free mid-table space.
+                else if(i==1){p.x=(int)(width*.014f);p.y=(int)(height*.145f);}
+                else if(i==2){p.x=width-p.width-(int)(width*.014f);p.y=(int)(height*.145f);}
                 else{
                     p.x=(int)(width*.014f);
                     // Measure actual wrapped text: bottom edge stays ABOVE the hand.
@@ -477,13 +498,14 @@ public final class CaptureService extends Service {
             for(int i=0;i<3;i++){
                 int n=byPlayer[i].size();
                 View p=panels[i];
-                if(playerRows[i]!=null)playerRows[i].setText("P"+(i+1)+"  "+buildCompactRankGroups(byPlayer[i]));
+                // Spatial location identifies the player. No redundant P1/P2/P3 label.
+                if(playerRows[i]!=null)playerRows[i].setText(recentPlaySpans(playerHistory[i]));
                 if(p!=null)p.setVisibility(n>0?View.VISIBLE:View.GONE);
             }
             if(otherPlayed.isEmpty())otherRow.setVisibility(View.GONE);
             else{
                 otherRow.setVisibility(View.VISIBLE);
-                otherRow.setText("Bạn/khác  "+buildCompactRankGroups(otherPlayed));
+                otherRow.setText(recentPlaySpans(otherHistory, "Khác  "));
             }
             List<String> remaining=remainingCards();
             remainingRow.setText(buildRemainingSpans(remaining));
@@ -504,6 +526,27 @@ public final class CaptureService extends Service {
             wm.getDefaultDisplay().getRealMetrics(metrics);
             updateOverlayLayout(metrics.widthPixels,metrics.heightPixels);
         }
+    }
+    /** Newest play first (highlighted), older plays separated by ›. No rank ordering. */
+    private CharSequence recentPlaySpans(RecentMoves history){
+        return recentPlaySpans(history, "");
+    }
+    private CharSequence recentPlaySpans(RecentMoves history,String prefix){
+        SpannableStringBuilder sb=new SpannableStringBuilder(prefix);
+        String latest=history.mostRecent();
+        int start=sb.length();
+        sb.append(latest);
+        if(!latest.isEmpty()){
+            sb.setSpan(new ForegroundColorSpan(0xffffe699),start,sb.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            sb.setSpan(new StyleSpan(android.graphics.Typeface.BOLD),start,sb.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        }
+        String older=history.olderMoves();
+        if(!older.isEmpty()){
+            int oldStart=sb.length();
+            sb.append("  ›  ").append(older);
+            sb.setSpan(new ForegroundColorSpan(0xffd8e4f3),oldStart,sb.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        }
+        return sb;
     }
     /** Green: rank can participate in a run of 3/4 consecutive remaining pairs.
      * Red takes priority if all 4 suits of the rank remain unseen.
@@ -549,24 +592,6 @@ public final class CaptureService extends Service {
         }
         return sb;
     }
-    private String buildCompactRankGroups(Collection<String> cards){
-        if(cards.isEmpty())return "-";
-        HashSet<String> owned=new HashSet<>(cards);
-        String[] ranks={"3","4","5","6","7","8","9","10","J","Q","K","A","2"};
-        String[] suits={"S","C","D","H"};
-        StringBuilder out=new StringBuilder();
-        for(String rank:ranks){
-            StringBuilder group=new StringBuilder(rank);
-            int n=0;
-            for(String suit:suits)if(owned.contains(rank+suit)){
-                group.append(suitSymbol(suit));n++;
-            }
-            if(n==0)continue;
-            if(out.length()>0)out.append("  ");
-            out.append(group);
-        }
-        return out.toString();
-    }
     private static String suitSymbol(String s){
         switch(s){
             case "S": return "♠";
@@ -582,17 +607,6 @@ public final class CaptureService extends Service {
         String symbol=suit.equals("S")?"♠":suit.equals("C")?"♣":suit.equals("H")?"♥":"♦";
         return rank+symbol;
     }
-    private static String renderSet(Collection<String> cards){
-        List<String> sorted=new ArrayList<>(cards);
-        sorted.sort(CaptureService::compareCards);
-        if(sorted.isEmpty())return "-";
-        StringBuilder sb=new StringBuilder();
-        for(int i=0;i<sorted.size();i++){
-            if(i>0)sb.append("  ");
-            sb.append(pretty(sorted.get(i)));
-        }
-        return sb.toString();
-    }
     private List<String> remainingCards(){
         ArrayList<String> remain=new ArrayList<>();
         String[] ranks={"3","4","5","6","7","8","9","10","J","Q","K","A","2"};
@@ -602,26 +616,6 @@ public final class CaptureService extends Service {
             if(!played.contains(c))remain.add(c);
         }
         return remain;
-    }
-    private static int compareCards(String a,String b){
-        int ra=rankValue(a),rb=rankValue(b);
-        if(ra!=rb)return Integer.compare(ra,rb);
-        return Integer.compare(suitValue(a),suitValue(b));
-    }
-    private static int rankValue(String c){
-        String r=c.substring(0,c.length()-1);
-        switch(r){
-            case "3": return 0; case "4": return 1; case "5": return 2; case "6": return 3;
-            case "7": return 4; case "8": return 5; case "9": return 6; case "10": return 7;
-            case "J": return 8; case "Q": return 9; case "K": return 10; case "A": return 11;
-            case "2": return 12; default: return 99;
-        }
-    }
-    private static int suitValue(String c){
-        String s=c.substring(c.length()-1);
-        switch(s){
-            case "S": return 0; case "C": return 1; case "D": return 2; case "H": return 3; default: return 9;
-        }
     }
     @Override public void onDestroy(){
         stopping=true;
