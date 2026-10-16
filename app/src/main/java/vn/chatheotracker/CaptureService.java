@@ -22,7 +22,8 @@ public final class CaptureService extends Service {
     static final String ACTION_START="vn.chatheotracker.START",ACTION_STOP="vn.chatheotracker.STOP";
     static final String ACTION_RESET="vn.chatheotracker.RESET";
     static final String ACTION_ADD="vn.chatheotracker.ADD", ACTION_REMOVE="vn.chatheotracker.REMOVE";
-    static final String EXTRA_RESULT="projection_result",EXTRA_DATA="projection_data",EXTRA_CARD="card";
+    static final String ACTION_NEXT_PLAYER="vn.chatheotracker.NEXT_PLAYER", ACTION_SET_PLAYER="vn.chatheotracker.SET_PLAYER";
+    static final String EXTRA_RESULT="projection_result",EXTRA_DATA="projection_data",EXTRA_CARD="card",EXTRA_PLAYER="player";
     private MediaProjection projection;
     private VirtualDisplay virtualDisplay;
     private ImageReader imageReader;
@@ -30,11 +31,13 @@ public final class CaptureService extends Service {
     private Handler workerHandler, mainHandler;
     private WindowManager wm;
     private View panel;
-    private TextView summary;
+    private TextView summary, turnView;
     private CardRecognizer recognizer;
     private long lastScanned=0;
     private String pending="";private int pendingFrames=0;
     private final LinkedHashSet<String> played=new LinkedHashSet<>();
+    private final LinkedHashSet<String>[] byPlayer=new LinkedHashSet[]{new LinkedHashSet<>(),new LinkedHashSet<>(),new LinkedHashSet<>()};
+    private int currentPlayer=0;
     private boolean stopping=false;
     private int densityDpi;
 
@@ -43,11 +46,27 @@ public final class CaptureService extends Service {
         if(intent==null)return START_NOT_STICKY;
         String action=intent.getAction();
         if(ACTION_STOP.equals(action)){stopSelf();return START_NOT_STICKY;}
-        if(ACTION_RESET.equals(action)){played.clear();pending="";pendingFrames=0;refresh();return START_NOT_STICKY;}
+        if(ACTION_RESET.equals(action)){resetRound();refresh();return START_NOT_STICKY;}
+        if(ACTION_SET_PLAYER.equals(action)){
+            int p=intent.getIntExtra(EXTRA_PLAYER,0);
+            if(p>=0 && p<3)currentPlayer=p;
+            refresh();return START_NOT_STICKY;
+        }
+        if(ACTION_NEXT_PLAYER.equals(action)){
+            currentPlayer=(currentPlayer+1)%3;
+            refresh();return START_NOT_STICKY;
+        }
         if(ACTION_ADD.equals(action)||ACTION_REMOVE.equals(action)) {
             String c=intent.getStringExtra(EXTRA_CARD);
+            int p=intent.getIntExtra(EXTRA_PLAYER,currentPlayer);
             if(c!=null&&!c.isEmpty()) {
-                if(ACTION_ADD.equals(action))played.add(c); else played.remove(c);
+                if(ACTION_ADD.equals(action)){
+                    played.add(c);
+                    if(p>=0 && p<3)byPlayer[p].add(c);
+                } else {
+                    played.remove(c);
+                    for(LinkedHashSet<String> s:byPlayer)s.remove(c);
+                }
             }
             refresh();return START_NOT_STICKY;
         }
@@ -136,8 +155,16 @@ public final class CaptureService extends Service {
                 if(newSignature.equals(pending))pendingFrames++;else{pending=newSignature;pendingFrames=1;}
                 if(pendingFrames>=2){
                     boolean changed=false;
-                    for(String c:cards)if(played.add(c))changed=true;
-                    if(changed)mainHandler.post(this::refresh);
+                    for(String c:cards){
+                        if(played.add(c)){
+                            byPlayer[currentPlayer].add(c);
+                            changed=true;
+                        }
+                    }
+                    if(changed){
+                        currentPlayer=(currentPlayer+1)%3;
+                        mainHandler.post(this::refresh);
+                    }
                 }
             }else{pending="";pendingFrames=0;}
         }catch(Exception e){android.util.Log.w("Tracker","Frame scan error",e);}
@@ -151,16 +178,21 @@ public final class CaptureService extends Service {
         wrap.setBackground(bg);
         TextView header=new TextView(this);header.setText("☰  ĐẾM BÀI  •  Kéo để di chuyển");
         header.setTextColor(0xffeeeeee);header.setTextSize(12);wrap.addView(header);
-        summary=new TextView(this);summary.setTextColor(0xffffffff);summary.setTextSize(14);
-        summary.setMaxLines(5);wrap.addView(summary);
+        turnView=new TextView(this);turnView.setTextColor(0xfff9dd76);turnView.setTextSize(13);wrap.addView(turnView);
+        summary=new TextView(this);summary.setTextColor(0xffffffff);summary.setTextSize(13);
+        summary.setMinWidth(760);
+        wrap.addView(summary);
         LinearLayout actions=new LinearLayout(this);
         Button reset=new Button(this);reset.setText("Ván mới");reset.setAllCaps(false);reset.setTextSize(12);
-        reset.setOnClickListener(v->{played.clear();pending="";pendingFrames=0;refresh();});
+        reset.setOnClickListener(v->{resetRound();refresh();});
+        Button next=new Button(this);next.setText("Đổi lượt");next.setTextSize(12);next.setAllCaps(false);
+        next.setOnClickListener(v->{currentPlayer=(currentPlayer+1)%3;refresh();});
         Button hide=new Button(this);hide.setText("Ẩn");hide.setTextSize(12);hide.setAllCaps(false);
         hide.setOnClickListener(v->{boolean show=summary.getVisibility()==View.GONE;
             summary.setVisibility(show?View.VISIBLE:View.GONE);
+            turnView.setVisibility(show?View.VISIBLE:View.GONE);
             hide.setText(show?"Ẩn":"Hiện");});
-        actions.addView(reset);actions.addView(hide);wrap.addView(actions);
+        actions.addView(reset);actions.addView(next);actions.addView(hide);wrap.addView(actions);
         int type=WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY;
         WindowManager.LayoutParams p=new WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,WindowManager.LayoutParams.WRAP_CONTENT,type,
@@ -184,19 +216,65 @@ public final class CaptureService extends Service {
     }
     private void refresh(){
         if(summary==null)return;
-        StringBuilder t=new StringBuilder("Đã đánh: ").append(played.size()).append("/52")
-            .append("  •  Chưa xuất hiện: ").append(52-played.size());
-        if(!played.isEmpty()) {
-            t.append("\n");int n=0;
-            for(String c:played){if(n++>=22){t.append(" …");break;}t.append(pretty(c)).append("  ");}
-        }else t.append("\nChưa ghi nhận lá nào");
+        if(turnView!=null)turnView.setText("Lượt tiếp theo gán cho: P"+(currentPlayer+1)+"  •  Tổng đã thấy: "+played.size()+"/52");
+        StringBuilder t=new StringBuilder();
+        t.append("P1: ").append(renderSet(byPlayer[0])).append("\n");
+        t.append("P2: ").append(renderSet(byPlayer[1])).append("\n");
+        t.append("P3: ").append(renderSet(byPlayer[2])).append("\n");
+        t.append("Chưa đánh ("+(52-played.size())+"): ").append(renderSet(remainingCards()));
         summary.setText(t.toString());
+    }
+    private void resetRound(){
+        played.clear();
+        for(LinkedHashSet<String> s:byPlayer)s.clear();
+        pending="";pendingFrames=0;currentPlayer=0;
     }
     private static String pretty(String s){
         if(s.isEmpty())return s;
         String rank=s.substring(0,s.length()-1),suit=s.substring(s.length()-1);
         String symbol=suit.equals("S")?"♠":suit.equals("C")?"♣":suit.equals("H")?"♥":"♦";
         return rank+symbol;
+    }
+    private static String renderSet(Collection<String> cards){
+        List<String> sorted=new ArrayList<>(cards);
+        sorted.sort(CaptureService::compareCards);
+        if(sorted.isEmpty())return "-";
+        StringBuilder sb=new StringBuilder();
+        for(int i=0;i<sorted.size();i++){
+            if(i>0)sb.append("  ");
+            sb.append(pretty(sorted.get(i)));
+        }
+        return sb.toString();
+    }
+    private List<String> remainingCards(){
+        ArrayList<String> remain=new ArrayList<>();
+        String[] ranks={"3","4","5","6","7","8","9","10","J","Q","K","A","2"};
+        String[] suits={"S","C","D","H"};
+        for(String r:ranks)for(String s:suits){
+            String c=r+s;
+            if(!played.contains(c))remain.add(c);
+        }
+        return remain;
+    }
+    private static int compareCards(String a,String b){
+        int ra=rankValue(a),rb=rankValue(b);
+        if(ra!=rb)return Integer.compare(ra,rb);
+        return Integer.compare(suitValue(a),suitValue(b));
+    }
+    private static int rankValue(String c){
+        String r=c.substring(0,c.length()-1);
+        switch(r){
+            case "3": return 0; case "4": return 1; case "5": return 2; case "6": return 3;
+            case "7": return 4; case "8": return 5; case "9": return 6; case "10": return 7;
+            case "J": return 8; case "Q": return 9; case "K": return 10; case "A": return 11;
+            case "2": return 12; default: return 99;
+        }
+    }
+    private static int suitValue(String c){
+        String s=c.substring(c.length()-1);
+        switch(s){
+            case "S": return 0; case "C": return 1; case "D": return 2; case "H": return 3; default: return 9;
+        }
     }
     @Override public void onDestroy(){
         stopping=true;

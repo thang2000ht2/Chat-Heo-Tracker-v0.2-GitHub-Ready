@@ -44,3 +44,10 @@ Chưa có Android SDK/build tools trong môi trường chuẩn bị bộ mã ngu
 Cấp quyền hiển thị trên ứng dụng khác, nhấn bắt đầu và cấp quyền chia sẻ **toàn bộ màn hình**, quay về game. Có thể kéo cửa sổ nổi và bấm "Ván mới". Khi nhận sai, mở lại Tracker để dùng hai nút thêm/gỡ quân. Hệ thống Android có thể yêu cầu cấp quyền ghi hình lại mỗi lần bắt đầu; thử điều chỉnh quyền chạy nền/cửa sổ nổi theo cấu hình HyperOS nếu bị dừng.
 
 **Quyền riêng tư:** Mã nguồn không khai báo quyền Internet; ảnh được xử lý trên điện thoại, không ghi lại thành video hoặc tự gửi lên server.
+
+
+## Bản v0.3 (players)
+- Bỏ giới hạn chỉ hiển thị 22 lá.
+- Popup tách riêng P1 / P2 / P3 và dòng Chưa đánh.
+- Các lá trên mỗi dòng được sắp xếp từ bé đến lớn theo thứ tự 3..2, phụ theo chất Bích < Chuồn < Rô < Cơ.
+- Thêm nút Đổi lượt trên popup và Chọn lượt tiếp theo trong màn hình chính để sửa vòng gán người chơi.
