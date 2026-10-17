@@ -33,6 +33,7 @@ public final class CaptureService extends Service {
     static final String ACTION_RESCAN="vn.chatheotracker.RESCAN";
     static final String ACTION_CLEAR_LEARNING="vn.chatheotracker.CLEAR_LEARNING";
     static final String ACTION_SET_HAND="vn.chatheotracker.SET_HAND";
+    static final String ACTION_CONFIRM_PASS="vn.chatheotracker.CONFIRM_PASS";
     static final String EXTRA_HAND_TEXT="hand_text";
     static final String ACTION_ADD="vn.chatheotracker.ADD", ACTION_REMOVE="vn.chatheotracker.REMOVE";
     static final String ACTION_NEXT_PLAYER="vn.chatheotracker.NEXT_PLAYER", ACTION_SET_PLAYER="vn.chatheotracker.SET_PLAYER";
@@ -47,6 +48,10 @@ public final class CaptureService extends Service {
     private final View[] panels=new View[4];
     private final WindowManager.LayoutParams[] panelParams=new WindowManager.LayoutParams[4];
     private final TextView[] playerRows=new TextView[3];
+    private final TextView[] threatRows=new TextView[3];
+    private final String[] threatLabels={"", "", ""};
+    private long lastThreatScan=0L;
+    private int threatEpoch=0;
     private TextView handRow, otherRow, remainingRow;
     private TextView scanBadge;
     private WindowManager.LayoutParams scanBadgeParams;
@@ -178,6 +183,21 @@ public final class CaptureService extends Service {
                     .remove("moves_0").remove("moves_1").remove("moves_2")
                     .remove("training_archive").apply();
                 adviceRequestId++;
+            }
+            if(projection==null)stopSelf();
+            return START_NOT_STICKY;
+        }
+        if(ACTION_CONFIRM_PASS.equals(action)){
+            int seat=intent.getIntExtra(EXTRA_PLAYER,-1);
+            if(seat>=0&&seat<3) synchronized(stateLock){
+                // No automated claim from a missed animation. Only record a user-
+                // confirmed pass with a verified current public lead.
+                if(boardStable && !currentBoard.isEmpty() && roundId!=null){
+                    trainEvent("opponent_pass","seat",seat,
+                        "lead",new ArrayList<>(currentBoard),
+                        "opponent_counts",knownCounts.clone(),
+                        "confidence","user_confirmed", "source","user_confirmation");
+                }
             }
             if(projection==null)stopSelf();
             return START_NOT_STICKY;
@@ -423,12 +443,14 @@ public final class CaptureService extends Service {
                         else state=handCards.size()+" lá · chưa đối soát";
                     }else if(myCards!=null){
                         state=myCards.complete?(myCards.cards.size()+" lá · chưa đồng bộ"):
-                            (myCards.cards.size()+" lá · "+myCards.diagnosis);
+                            (myCards.fanCount>0?"góc "+myCards.cards.size()+"/"+myCards.fanCount:
+                                myCards.diagnosis);
                     }else state="đã nhận hình";
                 }
                 setScanStatus(state);
             }
             if(changed)mainHandler.post(this::refresh);
+            if(changed && now-lastThreatScan>7000){lastThreatScan=now;scheduleThreatSnapshot();}
             if(turnBegan)mainHandler.post(()->showPendingAdvice("ĐANG QUÉT BÀI…"));
             if(turnEnded)mainHandler.post(()->{
                 if(dismissSuggestion!=null)mainHandler.removeCallbacks(dismissSuggestion);
@@ -721,6 +743,8 @@ public final class CaptureService extends Service {
         Arrays.fill(knownCounts,-1);Arrays.fill(lastCandidates,-1);
         Arrays.fill(candidateFrames,0);Arrays.fill(missingCards,0);
         recentCards.clear();sawAnyLowerCounter=false;
+        threatEpoch++;lastThreatScan=0;
+        Arrays.fill(threatLabels,"");
         redealDetector.clear();
         getSharedPreferences("tracker_strategy",MODE_PRIVATE).edit().remove("hand").remove("table").remove("hand_source").apply();
         mainHandler.post(()->{
@@ -806,12 +830,47 @@ public final class CaptureService extends Service {
         t.setIncludeFontPadding(false);
         return t;
     }
+    /** Recompute structural prevalence outside the expensive frame-decoding loop.
+     * This describes unverified sampled worlds, not a real-world chop probability.
+     */
+    private void scheduleThreatSnapshot(){
+        final LinkedHashSet<String> mine,seen;
+        final int[] counts;
+        final List<List<List<String>>> history=new ArrayList<>();
+        final int version;
+        synchronized(stateLock){
+            mine=new LinkedHashSet<>(handCards);
+            seen=observedCards();counts=knownCounts.clone();
+            for(LearnedOpponentHistory h:learning)history.add(h.snapshot());
+            version=++threatEpoch;
+        }
+        adviceExecutor.execute(()->{
+            ThreatScenarioSampler.Seat[] estimate=null;
+            try{estimate=ThreatScenarioSampler.sample(mine,seen,counts,history,
+                Objects.hash(mine,seen,Arrays.hashCode(counts)));}
+            catch(IllegalArgumentException ignored){}
+            final ThreatScenarioSampler.Seat[] values=estimate;
+            mainHandler.post(()->{
+                synchronized(stateLock){
+                    if(stopping || version!=threatEpoch)return;
+                    for(int k=0;k<3;k++){
+                        threatLabels[k]=values==null?"":values[k].concise();
+                    }
+                }
+                refresh();
+            });
+        });
+    }
     private void createPanel(){
         if(wm==null)return;
         for(int i=0;i<3;i++){
             LinearLayout layout=newPanel();
             playerRows[i]=newCardText(11f);
             layout.addView(playerRows[i]);
+            threatRows[i]=newCardText(9f);
+            threatRows[i].setTextColor(0xffc4e6f5);
+            threatRows[i].setVisibility(View.GONE);
+            layout.addView(threatRows[i]);
             layout.setVisibility(View.GONE); // Hide players with no detected plays.
             panels[i]=layout;
         }
@@ -1184,6 +1243,7 @@ public final class CaptureService extends Service {
         float side=Math.min(w,h);
         for(int i=0;i<3;i++){
             if(playerRows[i]!=null)playerRows[i].setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(18f,side*.021f));
+            if(threatRows[i]!=null)threatRows[i].setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(13f,side*.015f));
         }
         if(handRow!=null)handRow.setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(16f,side*.018f));
         if(otherRow!=null)otherRow.setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(16f,side*.018f));
@@ -1203,7 +1263,7 @@ public final class CaptureService extends Service {
             int maxWidth=landscape?(int)(width*(i==3?.575f:.275f)):(int)(width*.94f);
             int minWidth=(i==3)?dp(114):dp(40);
             int needed;
-            if(i<3)needed=desiredWidth(playerRows[i]);
+            if(i<3)needed=Math.max(desiredWidth(playerRows[i]),desiredWidth(threatRows[i]));
             else needed=Math.max(desiredWidth(remainingRow),Math.max(desiredWidth(handRow),desiredWidth(otherRow)));
             // The reset control occupies its own window, not HUD content.
             p.width=Math.min(maxWidth,Math.max(minWidth,needed+dp(20)));
@@ -1238,8 +1298,15 @@ public final class CaptureService extends Service {
                 int n=byPlayer[i].size();
                 View p=panels[i];
                 // Spatial location identifies the player. No redundant P1/P2/P3 label.
-                if(playerRows[i]!=null)playerRows[i].setText(recentPlaySpans(playerHistory[i]));
-                if(p!=null)p.setVisibility(n>0?View.VISIBLE:View.GONE);
+                if(playerRows[i]!=null){
+                    playerRows[i].setText(recentPlaySpans(playerHistory[i]));
+                    playerRows[i].setVisibility(n>0?View.VISIBLE:View.GONE);
+                }
+                if(threatRows[i]!=null){
+                    threatRows[i].setText(threatLabels[i]);
+                    threatRows[i].setVisibility(threatLabels[i].isEmpty()?View.GONE:View.VISIBLE);
+                }
+                if(p!=null)p.setVisibility(n>0||!threatLabels[i].isEmpty()?View.VISIBLE:View.GONE);
             }
             if(handCards.isEmpty())handRow.setVisibility(View.GONE);
             else{

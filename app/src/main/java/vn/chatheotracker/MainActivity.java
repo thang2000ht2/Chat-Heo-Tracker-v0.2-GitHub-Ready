@@ -93,6 +93,22 @@ public final class MainActivity extends Activity {
             state.setText("Đã lưu và đồng bộ bài tay vào Tracker đang chạy.");
         }));
         root.addView(text("Khi nút ĐÁNH màu xanh xuất hiện ổn định, Tracker tự quét và gợi ý nước có mức chặn ước tính thấp nhất, kèm cảnh báo heo khi có rủi ro từ bài và lịch sử của ba đối thủ. Gợi ý tự ẩn sau 5 giây. Nếu bài chưa khớp 52 lá, Tracker sẽ quét lại và yêu cầu kiểm tra, không đoán bừa. Bạn có thể bấm Gợi ý để tính lại, hoặc sửa bài tay trong trang Tracker nếu cần. Phần trăm là mức ước tính từ mô hình hành vi, chưa phải xác suất đã được hiệu chuẩn.",13,0xffbac4d2));
+        root.addView(text("XÁC NHẬN BỎ LƯỢT (CHỈ KHI NHÌN THẤY RÕ):",14,Color.WHITE));
+        LinearLayout passButtons=new LinearLayout(this);
+        final String[] passSeats={"Trên", "Trái", "Phải"};
+        for(int seat=0;seat<3;seat++){
+            final int index=seat;
+            Button btn=button(passSeats[seat]+" bỏ",()->{
+                Intent it=new Intent(this,CaptureService.class).setAction(CaptureService.ACTION_CONFIRM_PASS);
+                it.putExtra(CaptureService.EXTRA_PLAYER,index);
+                startService(it);
+                state.setText("Đã gửi sự kiện bỏ lượt do bạn xác nhận (chỉ lưu nếu giữa bàn đã đọc được).");
+            });
+            btn.setTextSize(12);
+            passButtons.addView(btn,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1));
+        }
+        root.addView(passButtons);
+        root.addView(text("Sự kiện bỏ lượt chưa được tự suy đoán từ khoảng trống. Các lượt bạn xác nhận sẽ chỉ ghi vào nhật ký, chưa tự coi là bằng chứng đối thủ không có bài chặn.",12,0xffbac4d2));
         root.addView(text("TỰ HỌC OFFLINE: Tracker ghi nhớ các lượt đánh nhận diện rõ qua nhiều ván. Nếu người chơi rời phòng hoặc có người mới, lịch sử cũ được lưu trong kho tự học offline; chỉ phiên của vị trí đó được làm mới. Khi người cũ quay lại với cùng dấu hiệu tên, ứng dụng có thể nạp lại dữ liệu. Khi nút Gợi ý xuất hiện, tỷ lệ chặn ước tính được phân tách cho đối thủ Trên / Trái / Phải.",13,0xffbac4d2));
         android.content.SharedPreferences profiles=getSharedPreferences("opponent_learning_v1",MODE_PRIVATE);
         root.addView(text("Lịch sử phiên hiện tại: Trên "

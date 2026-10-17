@@ -74,6 +74,23 @@ final class HandRecognizer {
             if(best==null || found.count>best.count ||
                 (found.count==best.count && found.error<best.error))best=found;
         }
+        if(best==null){
+            // Slow fallback only when the normal fast path finds nothing. On some
+            // devices the cards are shifted vertically after an animation/OS inset.
+            // A candidate is still required to pass per-corner template matching;
+            // this expands the search, never manufactures a missing card.
+            for(int y=668;y<=760;y+=4){
+                if(y>=706&&y<=723)continue;
+                boolean[] strip=new boolean[1471];
+                for(int x=350;x<=1820;x++){
+                    int c=b.getPixel(x,y);
+                    strip[x-350]=Color.red(c)>202&&Color.green(c)>202&&Color.blue(c)>202;
+                }
+                HandFanGeometry.Fan found=HandFanGeometry.inRow(strip,350,y);
+                if(found!=null && (best==null || found.count>best.count ||
+                    (found.count==best.count && found.error<best.error)))best=found;
+            }
+        }
         if(best==null)return new Result(Collections.emptyList(),false,"KHÔNG THẤY QUẠT");
         // White strip is measured from the fan top. The rank/suit corner boxes
         // are at fixed offsets relative to the start, but allow slight variation.
