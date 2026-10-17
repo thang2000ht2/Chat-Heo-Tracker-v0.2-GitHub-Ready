@@ -1,0 +1,13 @@
+Chặt Heo Tracker v2.7 — offline checks
+Date: 2026-10-17
+
+Pure Java: 28 test classes compiled with javac -encoding UTF-8, all PASS.
+Added: TestAdviceReentryDetector, TestAdviceRetryGate, TestBaitBehaviorSignals.
+Python: test_train_move_patterns.py, test_inspect_bait_signals.py,
+evaluation/test_calibration_check.py, test_dataset.py,
+test_pass_evidence.py, test_rules.py all PASS.
+Java syntax parser check for Android-bound sources produced no grammar errors,
+but could NOT compile Android classes: android.jar / Gradle / Android SDK absent.
+No APK built; not tested on Xiaomi / HyperOS or actual Pig Hunters.
+Behavioral bait signals are explicitly low-confidence observations, not labels
+of intent and not a calibrated predictor of special combinations.
