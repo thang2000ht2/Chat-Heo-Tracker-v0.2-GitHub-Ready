@@ -1,3 +1,5 @@
+**Lưu ý v2.3:** Bản này khắc phục báo cáo tỷ lệ chặn thiếu hiệu chuẩn và bổ sung bộ kiểm thử tự đấu luật tham chiếu. Chưa huấn luyện AI từ ván thật, chưa có engine Pig Hunters hoàn chỉnh. Đọc README_V2_3.md.
+
 # Chặt Heo Tracker v2.1 — Tempo, HUD & Redeal
 
 Đây là mã nguồn **thử nghiệm** cho Android 16, chạy nhận diện màn hình và bộ gợi ý chiến thuật **offline**. Mô hình không tự đánh bài. Tỷ lệ chặn là ước lượng dựa trên mẫu phân chia bài đối thủ và hành vi quan sát, không phải xác suất đã được chứng minh trên ván thực.

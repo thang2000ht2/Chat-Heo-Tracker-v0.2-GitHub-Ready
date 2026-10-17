@@ -14,9 +14,8 @@ final class HeoWarningAdvisor {
         // A lone heo does not answer a pair. Reject mismatched families even
         // when an upstream caller accidentally attempts to show a warning.
         if(lead!=null && !lead.isEmpty() && lead.size()!=proposed.size())return "";
-        int pct=(int)Math.round(100*Math.max(0,Math.min(1,chopRisk)));
-        if(pct==0)return "";
-        return "⚠ HEO: ≈"+pct+"% mẫu có thể chặt";
+        // Only a candidate structural threat is known, never a calibrated %. 
+        return "⚠ HEO: có khả năng có hàng chặt (chưa định lượng)";
     }
     private HeoWarningAdvisor(){}
 }

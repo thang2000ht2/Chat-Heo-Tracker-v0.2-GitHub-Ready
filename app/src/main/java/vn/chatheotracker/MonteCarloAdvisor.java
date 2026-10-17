@@ -181,7 +181,7 @@ final class MonteCarloAdvisor {
             if(i>0)detail.append("\n");
             detail.append(i+1).append(". ").append(render(c.move)).append(" · còn ")
                 .append(minTurns[full^c.move.mask]).append(" lượt tối thiểu");
-            if(sampling)detail.append(" · có bài để chặn: ").append((int)Math.round(100*c.response)).append("% mẫu");
+            if(sampling)detail.append(" · có bài chặn trong mẫu (chưa hiệu chuẩn)");
         }
         detail.append("\nChế độ: ").append(mode.label)
               .append(" · điểm xếp hạng/rủi ro là trọng số chiến thuật, không phải dự báo thứ hạng.");
@@ -318,9 +318,10 @@ final class MonteCarloAdvisor {
         }
         if(winner<0)return new Advice("QUÉT LẠI BÀI","");
         Move best=options.get(winner).move;
-        int pct=(int)Math.round(bestRisk*100);
+        // Legacy diagnostic path: do not expose a sampled holding probability as
+        // a calibrated opponent decision probability.
         return new Advice("ĐÁNH "+render(best),
-            pct+"% mẫu đối thủ có thể chặn"+(best.containsTwo?"/chặt":""));
+            "Chặn: chỉ số khả năng có bài chặn chưa hiệu chuẩn (không phải xác suất)");
     }
 
     /**
@@ -491,15 +492,15 @@ final class MonteCarloAdvisor {
             }
         }
         if(selected==null)return new Advice("QUÉT LẠI BÀI","");
-        int pct=(int)Math.round(100*selected.response);
-        String title="ĐÁNH "+render(selected.move);
         int winningIndex=options.indexOf(selected);
-        String detail="≈"+pct+"% mức chặn ước tính (offline"+
-            (integrity.missing>0?", thiếu "+integrity.missing+" lá lịch sử"+
-                (integrity.missing>12?", tin cậy thấp":""):"")+") · Trên "
-            +Math.round(100*individualTotals[winningIndex][0]/DEALS)+"% · Trái "
-            +Math.round(100*individualTotals[winningIndex][1]/DEALS)+"% · Phải "
-            +Math.round(100*individualTotals[winningIndex][2]/DEALS)+"%";
+        double minResponse=Double.POSITIVE_INFINITY,maxResponse=Double.NEGATIVE_INFINITY;
+        for(Choice option:options){
+            minResponse=Math.min(minResponse,option.response);
+            maxResponse=Math.max(maxResponse,option.response);
+        }
+        String title="ĐÁNH "+render(selected.move);
+        String detail=RiskReporting.describe(selected.response,minResponse,maxResponse,DEALS)
+            +(integrity.missing>0?" · thiếu "+integrity.missing+" lá lịch sử":"");
         // Warn only about the selected, legal move that *actually plays* a two.
         // Merely holding a two must never trigger an alert when answering a pair.
         ArrayList<String> proposed=new ArrayList<>();
