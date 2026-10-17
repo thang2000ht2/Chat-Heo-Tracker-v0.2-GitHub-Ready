@@ -414,20 +414,24 @@ final class MonteCarloAdvisor {
         }
         double best=Double.POSITIVE_INFINITY;
         Choice selected=null;
-        int afterTurns=99,afterCards=-1;
+        int minOpp=14;
+        for(int c:counts)if(c>0 && c<minOpp)minOpp=c;
         for(int i=0;i<options.size();i++){
             Choice c=options.get(i);
-            // Probabilistic union approximation, not a calibrated real win probability.
+            // These are *estimated willingness-to-challenge* values from sampled hands,
+            // not proven probabilities that someone will actually block.
             double reply=answerTotals[i]/DEALS, chop=chopTotals[i]/DEALS;
             double risk=reply+(1-reply)*chop;
             c.response=risk;
             int remainingTurns=minTurns[((1<<hand.size())-1)^c.move.mask];
-            boolean tied=Math.abs(risk-best)<0.008; // 0.8 percentage-point tie tolerance
-            boolean betterTie=mode==StrategyMode.FIRST?
-                    remainingTurns<afterTurns:
-                    c.move.count>afterCards || (c.move.count==afterCards&&remainingTurns<afterTurns);
-            if(risk<best-0.008 || (tied&&betterTie)){
-                selected=c;best=risk;afterTurns=remainingTurns;afterCards=c.move.count;
+            int after=hand.size()-c.move.count;
+            // 1–2–3–4 mode prioritizes FINISHING IN FEWER MOVES, while considering
+            // blocking, chops and opponents about to finish as additional costs.
+            double cost=FinishPriority.cost(remainingTurns,after,c.move.count,
+                reply,chop,minOpp,mode);
+            if(cost<best-1e-6 || (Math.abs(cost-best)<1e-6 &&
+                    (selected==null || risk<selected.response))){
+                selected=c;best=cost;
             }
         }
         if(selected==null)return new Advice("QUÉT LẠI BÀI","");

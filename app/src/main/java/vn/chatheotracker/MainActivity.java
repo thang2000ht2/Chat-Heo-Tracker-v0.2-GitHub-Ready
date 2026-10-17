@@ -30,7 +30,7 @@ public final class MainActivity extends Activity {
         root.setPadding(36, 64, 36, 20); root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(Color.rgb(20,22,29));
         TextView title = text("CHẶT HEO TRACKER",24,Color.WHITE); root.addView(title);
-        root.addView(text("v1.6 • AI offline tự học từ các lượt đã xác nhận • Android 16",15,0xffd0d0d0));
+        root.addView(text("v1.7 • AI offline • Gợi ý về sớm • Android 16",15,0xffd0d0d0));
         state=text("Chưa theo dõi",16,0xffa5e8a3);root.addView(state);
         Button overlay = button("1. Cho phép cửa sổ nổi", () -> {
             Intent i = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
@@ -47,7 +47,12 @@ public final class MainActivity extends Activity {
             startService(it);
             state.setText("Đã yêu cầu làm mới bộ bài");
         }));
-        root.addView(text("Lịch sử đối thủ: từ TRÁI sang PHẢI theo thời gian. Lượt mới nhất nằm bên phải, tô vàng. Không hiển thị nhãn P1/P2/P3.\n\nNút ↻ đặt lại bộ đếm. Gợi ý tự hiện khi đến lượt; nút Gợi ý dùng để quét lại. Không tự chọn hoặc đánh bài.",14,0xffdddddd));
+        root.addView(button("Quét lại, giữ dữ liệu ván đang chơi", () -> {
+            Intent it=new Intent(this,CaptureService.class).setAction(CaptureService.ACTION_RESCAN);
+            startService(it);
+            state.setText("Đã yêu cầu quét lại, không xóa lịch sử bài.");
+        }));
+        root.addView(text("Lịch sử đối thủ: từ TRÁI sang PHẢI theo thời gian. Lượt mới nhất nằm bên phải, tô vàng. Không hiển thị nhãn P1/P2/P3.\n\nChạm ↻ đặt lại bộ đếm; GIỮ ↻ để quét lại mà không xóa bài. Gợi ý tự hiện khi đến lượt, tự ẩn sau 5 giây.",14,0xffdddddd));
         root.addView(text("CHẾ ĐỘ CHƠI",17,Color.WHITE));
         Spinner gameMode=new Spinner(this);
         final String[] modes={StrategyMode.PLACEMENT.label,StrategyMode.FIRST.label};
@@ -64,8 +69,8 @@ public final class MainActivity extends Activity {
             @Override public void onNothingSelected(AdapterView<?> parent){}
         });
         root.addView(gameMode);
-        root.addView(text("Xếp hạng 1–2–3–4: coi trọng vị trí về và tránh giữ nhiều bài khi đối thủ sắp hết. Về nhất: ưu tiên con đường về đầu tiên. Đây là điểm số ước lượng, chưa mô phỏng đầy đủ tiền thưởng/phạt hoặc xác suất hạng.",13,0xffbac4d2));
-        root.addView(text("BÀI TAY HIỆN TẠI (cũng có thể bấm Bài tay ngay trong game):",17,Color.WHITE));
+        root.addView(text("Xếp hạng 1–2–3–4: ưu tiên phương án cần ít lượt để về sớm; dùng nguy cơ bị chặn/chặt heo để cân bằng. Về nhất: thận trọng hơn với nguy cơ mất lượt. Đây là điểm chiến thuật ước lượng, không phải xác suất về từng hạng.",13,0xffbac4d2));
+        root.addView(text("BÀI TAY (CHỈ SỬA TRONG APP NẾU NHẬN DIỆN SAI):",17,Color.WHITE));
         EditText hand=new EditText(this);
         hand.setTextColor(Color.WHITE);hand.setHintTextColor(0xffa9b4c6);
         hand.setHint("Ví dụ: 4♦ 6♠ 6♥ 7♣ 8♣ A♠ 2♥");
@@ -76,28 +81,35 @@ public final class MainActivity extends Activity {
         root.addView(button("Lưu bài tay",()->{
             StrategyAdvisor.Input handInput=StrategyAdvisor.parse(hand.getText().toString());
             if(handInput.error!=null){state.setText(handInput.error);return;}
+            String handText=hand.getText().toString().trim();
             getSharedPreferences("tracker_strategy",MODE_PRIVATE).edit()
-                .putString("hand",hand.getText().toString().trim())
+                .putString("hand",handText)
                 .putString("hand_source","manual")
                 .remove("table").apply();
-            state.setText("Đã lưu. Khi đến lượt, gợi ý sẽ tự hiện.");
+            Intent update=new Intent(this,CaptureService.class).setAction(CaptureService.ACTION_SET_HAND);
+            update.putExtra(CaptureService.EXTRA_HAND_TEXT,handText);
+            startService(update);
+            state.setText("Đã lưu và đồng bộ bài tay vào Tracker đang chạy.");
         }));
-        root.addView(text("Khi nút ĐÁNH màu xanh xuất hiện ổn định, Tracker tự quét và gợi ý nước có mức chặn ước tính thấp nhất, kèm cảnh báo heo khi có rủi ro từ bài và lịch sử của ba đối thủ. Gợi ý tự ẩn sau 5 giây. Nếu bài chưa khớp 52 lá, Tracker sẽ quét lại và yêu cầu kiểm tra, không đoán bừa. Bạn có thể bấm Gợi ý để tính lại hoặc Bài tay để sửa. Phần trăm là mức ước tính từ mô hình hành vi, chưa phải xác suất đã được hiệu chuẩn.",13,0xffbac4d2));
-        root.addView(text("TỰ HỌC OFFLINE: Tracker ghi nhớ các lượt đánh nhận diện rõ qua nhiều ván. Nếu tên người ngồi ở một vị trí thay đổi ổn định hoặc ghế trống rồi có người mới, lịch sử học của riêng vị trí đó sẽ được đặt lại. Khi nút Gợi ý xuất hiện, tỷ lệ chặn ước tính được phân tách cho đối thủ Trên / Trái / Phải.",13,0xffbac4d2));
+        root.addView(text("Khi nút ĐÁNH màu xanh xuất hiện ổn định, Tracker tự quét và gợi ý nước có mức chặn ước tính thấp nhất, kèm cảnh báo heo khi có rủi ro từ bài và lịch sử của ba đối thủ. Gợi ý tự ẩn sau 5 giây. Nếu bài chưa khớp 52 lá, Tracker sẽ quét lại và yêu cầu kiểm tra, không đoán bừa. Bạn có thể bấm Gợi ý để tính lại, hoặc sửa bài tay trong trang Tracker nếu cần. Phần trăm là mức ước tính từ mô hình hành vi, chưa phải xác suất đã được hiệu chuẩn.",13,0xffbac4d2));
+        root.addView(text("TỰ HỌC OFFLINE: Tracker ghi nhớ các lượt đánh nhận diện rõ qua nhiều ván. Nếu người chơi rời phòng hoặc có người mới, lịch sử cũ được lưu trong kho tự học offline; chỉ phiên của vị trí đó được làm mới. Khi người cũ quay lại với cùng dấu hiệu tên, ứng dụng có thể nạp lại dữ liệu. Khi nút Gợi ý xuất hiện, tỷ lệ chặn ước tính được phân tách cho đối thủ Trên / Trái / Phải.",13,0xffbac4d2));
         android.content.SharedPreferences profiles=getSharedPreferences("opponent_learning_v1",MODE_PRIVATE);
-        root.addView(text("Lịch sử đã học: Trên "
+        root.addView(text("Lịch sử phiên hiện tại: Trên "
             +LearnedOpponentHistory.decode(profiles.getString("moves_0","")).size()
             +" · Trái "+LearnedOpponentHistory.decode(profiles.getString("moves_1","")).size()
             +" · Phải "+LearnedOpponentHistory.decode(profiles.getString("moves_2","")).size()
             +" lượt xác nhận",13,0xffa5e8a3));
+        root.addView(text("Kho lịch sử lâu dài: "+OpponentLearningArchive.decode(profiles.getString("training_archive", "")).profiles()
+            +" hồ sơ đã xác nhận tên, được lưu ngay trên điện thoại. Không xóa khi người chơi rời phòng.",13,0xffa5e8a3));
         root.addView(button("Xóa dữ liệu tự học đối thủ", () -> {
             new android.app.AlertDialog.Builder(this)
                 .setTitle("Xóa dữ liệu tự học?")
-                .setMessage("Xóa lịch sử học của cả 3 đối thủ trên điện thoại. Không ảnh hưởng dữ liệu bài của ván đang chơi.")
+                .setMessage("Xóa toàn bộ kho lịch sử tự học và các phiên hiện tại. Không ảnh hưởng bài trong ván đang chơi.")
                 .setNegativeButton("Hủy",(d,w)->{})
                 .setPositiveButton("Xóa",(d,w)->{
                     getSharedPreferences("opponent_learning_v1",MODE_PRIVATE).edit()
-                        .remove("moves_0").remove("moves_1").remove("moves_2").apply();
+                        .remove("moves_0").remove("moves_1").remove("moves_2")
+                        .remove("training_archive").apply();
                     Intent it=new Intent(this,CaptureService.class).setAction(CaptureService.ACTION_CLEAR_LEARNING);
                     startService(it);
                     state.setText("Đã xóa các lịch sử học đã lưu.");

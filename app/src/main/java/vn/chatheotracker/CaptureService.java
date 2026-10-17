@@ -30,7 +30,10 @@ import java.util.concurrent.Executors;
 public final class CaptureService extends Service {
     static final String ACTION_START="vn.chatheotracker.START",ACTION_STOP="vn.chatheotracker.STOP";
     static final String ACTION_RESET="vn.chatheotracker.RESET";
+    static final String ACTION_RESCAN="vn.chatheotracker.RESCAN";
     static final String ACTION_CLEAR_LEARNING="vn.chatheotracker.CLEAR_LEARNING";
+    static final String ACTION_SET_HAND="vn.chatheotracker.SET_HAND";
+    static final String EXTRA_HAND_TEXT="hand_text";
     static final String ACTION_ADD="vn.chatheotracker.ADD", ACTION_REMOVE="vn.chatheotracker.REMOVE";
     static final String ACTION_NEXT_PLAYER="vn.chatheotracker.NEXT_PLAYER", ACTION_SET_PLAYER="vn.chatheotracker.SET_PLAYER";
     static final String EXTRA_RESULT="projection_result",EXTRA_DATA="projection_data",EXTRA_CARD="card",EXTRA_PLAYER="player";
@@ -46,12 +49,25 @@ public final class CaptureService extends Service {
     private final TextView[] playerRows=new TextView[3];
     private TextView handRow, otherRow, remainingRow, status;
     // Only this small top-left window accepts touches. Card HUD windows are pass-through.
-    private TextView resetButton, suggestButton, handButton, suggestionText, handCount;
-    private WindowManager.LayoutParams resetButtonParams, suggestButtonParams, handButtonParams,
-        suggestionPanelParams, handEditorParams;
-    private View suggestionPanel, handEditor;
-    private final LinkedHashSet<String> draftHand=new LinkedHashSet<>();
-    private final LinkedHashMap<String,TextView> handCells=new LinkedHashMap<>();
+    private TextView resetButton, suggestButton, suggestionText;
+    private WindowManager.LayoutParams resetButtonParams, suggestButtonParams, suggestionPanelParams;
+    private View suggestionPanel;
+    private volatile long lastFrameArrived=0, lastFrameDecoded=0;
+    private long lastRecoveryAttempt=0;
+    private int scanFrameIndex=0;
+    private final Runnable captureWatchdog=new Runnable(){
+        @Override public void run(){
+            if(stopping || projection==null || workerHandler==null)return;
+            long now=SystemClock.elapsedRealtime();
+            boolean streamStalled=lastFrameArrived>0 && now-lastFrameArrived>7000;
+            boolean decodeStalled=lastFrameDecoded>0 && now-lastFrameDecoded>7000;
+            if((streamStalled || decodeStalled) && now-lastRecoveryAttempt>15000){
+                lastRecoveryAttempt=now;
+                workerHandler.post(()->rebindCaptureSurface());
+            }
+            mainHandler.postDelayed(this,3000);
+        }
+    };
     private Runnable dismissSuggestion;
     private CardRecognizer recognizer;
     private CountRecognizer countRecognizer;
@@ -95,6 +111,7 @@ public final class CaptureService extends Service {
     // On-device learned play patterns belong to the current occupant of each seat.
     // These persist across hands, unlike the public cards of the current hand.
     private final LearnedOpponentHistory[] learning={new LearnedOpponentHistory(),new LearnedOpponentHistory(),new LearnedOpponentHistory()};
+    private OpponentLearningArchive trainingArchive=new OpponentLearningArchive();
     private final SeatIdentityTracker[] seatIdentity=new SeatIdentityTracker[3];
     private final RecentMoves otherHistory=new RecentMoves();
     private final LinkedHashSet<String> waitingCards=new LinkedHashSet<>();
@@ -117,12 +134,36 @@ public final class CaptureService extends Service {
             manualReset();
             return START_NOT_STICKY;
         }
+        if(ACTION_RESCAN.equals(action)){
+            forceRescan();
+            return START_NOT_STICKY;
+        }
         if(ACTION_CLEAR_LEARNING.equals(action)){
             synchronized(stateLock){
                 for(int i=0;i<3;i++)learning[i].clear();
+                trainingArchive.clear();
                 getSharedPreferences("opponent_learning_v1",MODE_PRIVATE).edit()
-                    .remove("moves_0").remove("moves_1").remove("moves_2").apply();
+                    .remove("moves_0").remove("moves_1").remove("moves_2")
+                    .remove("training_archive").apply();
                 adviceRequestId++;
+            }
+            if(projection==null)stopSelf();
+            return START_NOT_STICKY;
+        }
+        if(ACTION_SET_HAND.equals(action)){
+            StrategyAdvisor.Input candidate=StrategyAdvisor.parse(intent.getStringExtra(EXTRA_HAND_TEXT));
+            if(candidate.error==null && !candidate.cards.isEmpty()){
+                synchronized(stateLock){
+                    handCards.clear();handCards.addAll(candidate.cards);
+                    manualHandOverride=true;
+                    handPending="";handPendingFrames=0;
+                    visualHandTrusted=false;visualFrames=0;
+                    persistCurrentHand();
+                    getSharedPreferences("tracker_strategy",MODE_PRIVATE).edit()
+                        .putString("hand_source","manual").apply();
+                    adviceRequestId++;
+                }
+                refresh();
             }
             if(projection==null)stopSelf();
             return START_NOT_STICKY;
@@ -207,6 +248,8 @@ public final class CaptureService extends Service {
         imageReader.setOnImageAvailableListener(this::onImage,workerHandler);
         virtualDisplay=projection.createVirtualDisplay("LocalCardCapture",width,height,dm.densityDpi,
             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,imageReader.getSurface(),null,workerHandler);
+        lastFrameArrived=SystemClock.elapsedRealtime();
+        mainHandler.postDelayed(captureWatchdog,3000);
     }
     private void resizeCapture(int width,int height){
         if(virtualDisplay==null || width<=0 || height<=0)return;
@@ -221,13 +264,35 @@ public final class CaptureService extends Service {
             if(old!=null){old.setOnImageAvailableListener(null,null);old.close();}
         }catch(Exception e){android.util.Log.e("Tracker","Resize capture failed",e);}
     }
+    /** Reconnect the existing virtual display surface (not a second MediaProjection).
+     * Android 14+ forbids starting another capture session with the same consent token.
+     */
+    private void rebindCaptureSurface(){
+        if(stopping || projection==null || virtualDisplay==null || imageReader==null)return;
+        try{
+            ImageReader old=imageReader;
+            ImageReader next=ImageReader.newInstance(old.getWidth(),old.getHeight(),PixelFormat.RGBA_8888,2);
+            next.setOnImageAvailableListener(this::onImage,workerHandler);
+            virtualDisplay.setSurface(next.getSurface());
+            imageReader=next;
+            old.setOnImageAvailableListener(null,null);
+            old.close();
+            recentCards.clear();
+            lastScanned=0;
+            android.util.Log.i("Tracker","Reconnected stalled image surface");
+        }catch(Exception e){
+            android.util.Log.e("Tracker","Capture reconnection failed; new screen permission may be needed",e);
+        }
+    }
     private void onImage(ImageReader reader){
         Image image=null;
         try {
             image=reader.acquireLatestImage();
             if(image==null)return;
             long now=SystemClock.elapsedRealtime();
-            if(now-lastScanned<240)return;
+            lastFrameArrived=now;
+            if(now-lastScanned<210)return;
+            scanFrameIndex++;
             lastScanned=now;
             Image.Plane plane=image.getPlanes()[0];
             int w=image.getWidth(),h=image.getHeight();
@@ -243,17 +308,29 @@ public final class CaptureService extends Service {
             List<String> whiteCards=recognizer.recognizeCurrentPlay(normalized);
             int[] counts=countRecognizer.read(normalized);
             boolean turnNow=LocalTurnDetector.isMyTurn(normalized);
-            String[] seatNames=SeatVisualSignature.read(normalized);
-            // Read all visible card corners, even after part of the hand is spent.
-            HandRecognizer.Result myCards=handRecognizer.recognizeVisibleHand(normalized);
-            if(!myCards.complete)myCards=handRecognizer.recognizeFullHand(normalized);
+            // Nicknames change rarely. Reading them every frame adds delay and OCR noise.
+            boolean readSeats=scanFrameIndex%4==0;
+            String[] seatNames=readSeats?SeatVisualSignature.read(normalized):null;
+            // Scan the user's fan more frequently when absent, inconsistent, or the
+            // player is about to act; otherwise run it every second frame.
+            boolean readHand=handCards.isEmpty() || autoAdvicePending || suggestRequested
+                || scanFrameIndex%2==0;
+            HandRecognizer.Result myCards=null;
+            if(readHand){
+                myCards=handRecognizer.recognizeVisibleHand(normalized);
+                if(!myCards.complete && handCards.isEmpty())
+                    myCards=handRecognizer.recognizeFullHand(normalized);
+            }
             normalized.recycle();
+            lastFrameDecoded=SystemClock.elapsedRealtime();
             boolean changed,trySuggestion=false,turnBegan=false,turnEnded=false;
             synchronized(stateLock){
-                boolean occupantChanged=handleSeatIdentities(seatNames,counts);
+                boolean occupantChanged=readSeats && handleSeatIdentities(seatNames,counts);
                 changed=handleFrame(cards,counts,now) || occupantChanged;
-                if(handleHandFrame(myCards))changed=true;
-                if(updateVisibleHand(myCards))changed=true;
+                if(myCards!=null){
+                    if(handleHandFrame(myCards))changed=true;
+                    if(updateVisibleHand(myCards))changed=true;
+                }
                 updateBoard(whiteCards);
                 if(turnNow){
                     turnFrames++;absentTurnFrames=0;
@@ -274,9 +351,9 @@ public final class CaptureService extends Service {
                     // At least three post-turn frames for screen / card history stabilization.
                     // If counters/hand still mismatch, keep scanning for up to ~3 seconds.
                     boolean ready=boardStable && !handCards.isEmpty() &&
-                        conserved(handCards,played,knownCounts) &&
+                        conserved(handCards,observedCards(),knownCounts) &&
                         (visualHandTrusted||manualHandOverride||!handPending.isEmpty());
-                    if((ready&&autoAdviceScanFrames>=3)||autoAdviceScanFrames>=12){
+                    if((ready&&autoAdviceScanFrames>=2)||autoAdviceScanFrames>=22){
                         autoAdvicePending=false;trySuggestion=true;
                     }
                 }
@@ -292,6 +369,7 @@ public final class CaptureService extends Service {
             if(turnEnded)mainHandler.post(()->{
                 if(dismissSuggestion!=null)mainHandler.removeCallbacks(dismissSuggestion);
                 if(suggestionPanel!=null)suggestionPanel.setVisibility(View.GONE);
+                if(panels[3]!=null)panels[3].setVisibility(View.VISIBLE);
             });
             if(trySuggestion)runFreshAdvice();
         }catch(Exception e){android.util.Log.w("Tracker","Frame scan error",e);}
@@ -460,33 +538,46 @@ public final class CaptureService extends Service {
         }
         return changed;
     }
-    /** No names or screenshots uploaded. Persistent local play samples are seat-scoped. */
+    /** Restore active profiles and the long-term archive; replacement never deletes evidence. */
     private void loadOpponentLearning(){
         android.content.SharedPreferences sp=getSharedPreferences("opponent_learning_v1",MODE_PRIVATE);
+        trainingArchive=OpponentLearningArchive.decode(sp.getString("training_archive", ""));
         for(int i=0;i<3;i++){
             learning[i]=LearnedOpponentHistory.decode(sp.getString("moves_"+i,""));
             seatIdentity[i]=new SeatIdentityTracker(sp.getString("fingerprint_"+i,null));
-            if(seatIdentity[i].active()==null)learning[i].clear();
+            String id=seatIdentity[i].active();
+            if(id!=null && learning[i].size()>0)trainingArchive.remember(id,learning[i]);
+            else if(id==null && learning[i].size()>0){
+                // Legacy seat history without a verified fingerprint: keep it in a
+                // separate legacy slot instead of attributing it to a new person.
+                sp.edit().putString("legacy_moves_"+i,learning[i].encode()).apply();
+                learning[i]=new LearnedOpponentHistory();
+            }
         }
+        persistArchive();
+    }
+    private void persistArchive(){
+        getSharedPreferences("opponent_learning_v1",MODE_PRIVATE).edit()
+            .putString("training_archive",trainingArchive.encode()).apply();
     }
     private void persistOpponentLearning(int i){
         if(i<0||i>=3)return;
+        if(seatIdentity[i]!=null && seatIdentity[i].active()!=null){
+            trainingArchive.remember(seatIdentity[i].active(),learning[i]);
+        }
         getSharedPreferences("opponent_learning_v1",MODE_PRIVATE).edit()
             .putString("moves_"+i,learning[i].encode())
-            .apply();
+            .putString("training_archive",trainingArchive.encode()).apply();
     }
     private void persistIdentity(int i){
         android.content.SharedPreferences.Editor e=
             getSharedPreferences("opponent_learning_v1",MODE_PRIVATE).edit();
         if(seatIdentity[i].active()==null)e.remove("fingerprint_"+i);
         else e.putString("fingerprint_"+i,seatIdentity[i].active());
-        e.putString("moves_"+i,learning[i].encode()).apply();
+        e.putString("moves_"+i,learning[i].encode())
+            .putString("training_archive",trainingArchive.encode()).apply();
     }
-    /**
-     * A different, stable nickname ribbon resets that seat's learned profile.
-     * Leaving is confirmed only when the OTHER seats remain visible, so a menu,
-     * full-screen chat, or capture interruption does not erase everybody.
-     */
+    /** Distinguish occupants without ever deleting their historical training record. */
     private boolean handleSeatIdentities(String[] signatures,int[] counts){
         if(seatIdentity[0]==null)return false;
         boolean changed=false;
@@ -494,19 +585,27 @@ public final class CaptureService extends Service {
             boolean roomVisible=false;
             for(int j=0;j<3;j++)if(j!=i && signatures[j]!=null &&
                     counts!=null && j<counts.length && counts[j]>=0)roomVisible=true;
+            String oldIdentity=seatIdentity[i].active();
             SeatIdentityTracker.Event ev=seatIdentity[i].observe(signatures[i],roomVisible);
             if(ev==SeatIdentityTracker.Event.NONE)continue;
             if(ev==SeatIdentityTracker.Event.REPLACED || ev==SeatIdentityTracker.Event.VACATED){
-                // Keep the global already-played deck until the next confirmed deal,
-                // but don't attribute earlier plays to the new occupant.
-                learning[i].clear();
-                byPlayer[i].clear();
-                playerHistory[i].clear();
-                missingCards[i]=0;
+                trainingArchive.remember(oldIdentity,learning[i]);
+                // Reset only the CURRENT seat session. Older opponents remain in archive.
+                learning[i]=new LearnedOpponentHistory();
+                if(ev==SeatIdentityTracker.Event.REPLACED)
+                    learning[i]=trainingArchive.restore(seatIdentity[i].active());
+                // Do not erase already seen moves from the current deal when a
+                // player leaves: they are part of the same 52-card deck. The
+                // next confirmed deal will clear these visual round rows.
                 knownCounts[i]=-1;lastCandidates[i]=-1;candidateFrames[i]=0;
                 for(int k=countDrops.size()-1;k>=0;k--)if(countDrops.get(k).player==i)countDrops.remove(k);
                 adviceRequestId++;autoAdvicePending=myTurn;
                 autoAdviceScanFrames=0;
+                changed=true;
+            }else if(ev==SeatIdentityTracker.Event.FIRST_SEEN){
+                // Restore a previously seen player if they returned to this seat.
+                trainingArchive.remember(oldIdentity,learning[i]);
+                learning[i]=trainingArchive.restore(seatIdentity[i].active());
                 changed=true;
             }
             persistIdentity(i);
@@ -538,14 +637,39 @@ public final class CaptureService extends Service {
         getSharedPreferences("tracker_strategy",MODE_PRIVATE).edit().remove("hand").remove("table").remove("hand_source").apply();
         mainHandler.post(()->{
             if(suggestionPanel!=null)suggestionPanel.setVisibility(View.GONE);
-            if(handEditor!=null)handEditor.setVisibility(View.GONE);
-            draftHand.clear();
+            if(panels[3]!=null)panels[3].setVisibility(View.VISIBLE);
         });
     }
     private void manualReset(){
         synchronized(stateLock){
             resetRoundInternal();
-            ignoreCardsUntil=SystemClock.elapsedRealtime()+900;
+            ignoreCardsUntil=SystemClock.elapsedRealtime()+250;
+            lastScanned=0;
+        }
+        if(projection==null || virtualDisplay==null){
+            Toast.makeText(this,"Ghi màn hình đã dừng. Mở Tracker và cấp lại quyền.",Toast.LENGTH_LONG).show();
+        }else if(lastFrameArrived>0 && SystemClock.elapsedRealtime()-lastFrameArrived>4500){
+            if(workerHandler!=null)workerHandler.post(this::rebindCaptureSurface);
+        }
+        refresh();
+    }
+    /** Recovery without deleting already observed cards and training records. */
+    private void forceRescan(){
+        synchronized(stateLock){
+            recentCards.clear();
+            handPending="";handPendingFrames=0;
+            visualCandidate="";visualFrames=0;visualHandTrusted=false;
+            boardCandidate="";boardFrames=0;boardStable=false;
+            lastScanned=0;
+            Arrays.fill(lastCandidates,-1);Arrays.fill(candidateFrames,0);
+            adviceRequestId++;
+            if(myTurn){autoAdvicePending=true;autoAdviceScanFrames=0;}
+        }
+        if(projection==null || virtualDisplay==null){
+            Toast.makeText(this,"Quyền ghi màn hình đã dừng. Hãy cấp lại trong Tracker.",Toast.LENGTH_LONG).show();
+            if(projection==null)stopSelf();
+        }else if(workerHandler!=null){
+            workerHandler.post(this::rebindCaptureSurface);
         }
         refresh();
     }
@@ -628,13 +752,13 @@ public final class CaptureService extends Service {
                     |WindowManager.LayoutParams.FLAG_SECURE,
                 PixelFormat.TRANSLUCENT);
             params.gravity=Gravity.TOP|Gravity.LEFT;
-            params.alpha=.90f;
+            // Android 12+ blocks touch-through for untrusted overlays with alpha > .8.
+            params.alpha=.78f;
             panelParams[i]=params;
             wm.addView(panels[i],params);
         }
         createResetButton();
         createSuggestControls();
-        createHandControls();
         refresh();
     }
     /** The top-left reset control is its own tiny touch target; HUD remains pass-through. */
@@ -650,6 +774,9 @@ public final class CaptureService extends Service {
         bg.setStroke(dp(1),0xffb9c2cd);
         resetButton.setBackground(bg);
         resetButton.setOnClickListener(v->manualReset());
+        resetButton.setOnLongClickListener(v->{forceRescan();
+            Toast.makeText(this,"Đang quét lại, giữ nguyên lịch sử",Toast.LENGTH_SHORT).show();
+            return true;});
         resetButtonParams=new WindowManager.LayoutParams(dp(42),dp(42),
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
@@ -703,144 +830,12 @@ public final class CaptureService extends Service {
                 |WindowManager.LayoutParams.FLAG_SECURE,
             PixelFormat.TRANSLUCENT);
         suggestionPanelParams.gravity=Gravity.TOP|Gravity.LEFT;
-        suggestionPanelParams.alpha=.96f;
+        // Keep alpha <= .8 so the non-touchable popup cannot intercept game taps.
+        suggestionPanelParams.alpha=.78f;
         wm.addView(suggestionPanel,suggestionPanelParams);
         placeSuggestionControls();
         wm.updateViewLayout(suggestionPanel,suggestionPanelParams);
     }
-    /** Editable 52-card selector, available without leaving the game.
-     * The 13-by-4 grid appears only while editing and is dismissed afterwards. */
-    private void createHandControls(){
-        handButton=new TextView(this);
-        handButton.setText("Bài tay");
-        handButton.setContentDescription("Chọn bài tay trong khi chơi");
-        handButton.setGravity(Gravity.CENTER);
-        handButton.setTextColor(0xffffffff);
-        handButton.setTextSize(13f);
-        handButton.setTypeface(android.graphics.Typeface.DEFAULT,android.graphics.Typeface.BOLD);
-        android.graphics.drawable.GradientDrawable bg=new android.graphics.drawable.GradientDrawable();
-        bg.setColor(0xee303b51);bg.setCornerRadius(dp(10));
-        bg.setStroke(dp(1),0xffb6c8e6);
-        handButton.setBackground(bg);
-        handButtonParams=new WindowManager.LayoutParams(dp(69),dp(42),
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                |WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
-                |WindowManager.LayoutParams.FLAG_SECURE,
-            PixelFormat.TRANSLUCENT);
-        handButtonParams.gravity=Gravity.TOP|Gravity.LEFT;
-        handButtonParams.x=dp(119);handButtonParams.y=dp(6);
-        handButton.setOnClickListener(v->toggleHandEditor());
-        wm.addView(handButton,handButtonParams);
-
-        LinearLayout editor=newPanel();
-        editor.setPadding(dp(7),dp(5),dp(7),dp(6));
-        handCount=newCardText(14f);
-        handCount.setTypeface(android.graphics.Typeface.DEFAULT,android.graphics.Typeface.BOLD);
-        editor.addView(handCount);
-        TextView hint=newCardText(10f);
-        hint.setText("Chạm để chọn/bỏ lá đang cầm. Tối đa 13 lá.");
-        editor.addView(hint);
-        GridLayout grid=new GridLayout(this);
-        grid.setColumnCount(13);
-        for(String suit:MonteCarloAdvisor.SUITS){
-            for(String rank:MonteCarloAdvisor.RANKS){
-                String card=rank+suit;
-                TextView cell=new TextView(this);
-                cell.setText(rank+suitSymbol(suit));
-                cell.setTextSize(rank.equals("10")?10f:11f);
-                cell.setTypeface(android.graphics.Typeface.DEFAULT,android.graphics.Typeface.BOLD);
-                cell.setGravity(Gravity.CENTER);
-                cell.setPadding(0,0,0,0);
-                GridLayout.LayoutParams cp=new GridLayout.LayoutParams();
-                cp.width=dp(33);cp.height=dp(30);
-                cp.setMargins(dp(1),dp(1),dp(1),dp(1));
-                grid.addView(cell,cp);
-                handCells.put(card,cell);
-                cell.setOnClickListener(v->{
-                    if(draftHand.contains(card))draftHand.remove(card);
-                    else if(draftHand.size()<13)draftHand.add(card);
-                    else Toast.makeText(this,"Tối đa 13 lá",Toast.LENGTH_SHORT).show();
-                    renderHandEditor();
-                });
-            }
-        }
-        editor.addView(grid);
-        LinearLayout actions=new LinearLayout(this);
-        actions.setOrientation(LinearLayout.HORIZONTAL);
-        TextView clear=editorAction("Xóa chọn");
-        clear.setOnClickListener(v->{draftHand.clear();renderHandEditor();});
-        TextView close=editorAction("Đóng");
-        close.setOnClickListener(v->handEditor.setVisibility(View.GONE));
-        TextView save=editorAction("Lưu bài tay");
-        save.setOnClickListener(v->saveHandEditor());
-        actions.addView(clear);actions.addView(close);actions.addView(save);
-        editor.addView(actions);
-        handEditor=editor;
-        handEditor.setVisibility(View.GONE);
-        handEditorParams=new WindowManager.LayoutParams(dp(470),WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE|WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
-                |WindowManager.LayoutParams.FLAG_SECURE,
-            PixelFormat.TRANSLUCENT);
-        handEditorParams.gravity=Gravity.TOP|Gravity.LEFT;
-        handEditorParams.x=dp(5);handEditorParams.y=dp(53);
-        wm.addView(handEditor,handEditorParams);
-    }
-    private TextView editorAction(String title){
-        TextView v=newCardText(12f);
-        v.setText(title);
-        v.setTextColor(0xffffffff);
-        v.setTypeface(android.graphics.Typeface.DEFAULT,android.graphics.Typeface.BOLD);
-        v.setPadding(dp(12),dp(7),dp(12),dp(7));
-        v.setGravity(Gravity.CENTER);
-        return v;
-    }
-    private void toggleHandEditor(){
-        if(handEditor==null)return;
-        if(handEditor.getVisibility()==View.VISIBLE){handEditor.setVisibility(View.GONE);return;}
-        draftHand.clear();
-        StrategyAdvisor.Input parsed=StrategyAdvisor.parse(
-            getSharedPreferences("tracker_strategy",MODE_PRIVATE).getString("hand",""));
-        if(parsed.error==null)draftHand.addAll(parsed.cards);
-        if(suggestionPanel!=null)suggestionPanel.setVisibility(View.GONE);
-        renderHandEditor();
-        handEditor.setVisibility(View.VISIBLE);
-    }
-    private void renderHandEditor(){
-        if(handCount==null)return;
-        handCount.setText("BÀI TAY  "+draftHand.size()+"/13");
-        for(Map.Entry<String,TextView> entry:handCells.entrySet()){
-            boolean selected=draftHand.contains(entry.getKey());
-            TextView cell=entry.getValue();
-            android.graphics.drawable.GradientDrawable shape=new android.graphics.drawable.GradientDrawable();
-            shape.setColor(selected?0xff1e7550:0xff222c3e);
-            shape.setCornerRadius(dp(4));
-            shape.setStroke(dp(1),selected?0xff9df1be:0xff49556a);
-            cell.setBackground(shape);
-            boolean red=entry.getKey().endsWith("H")||entry.getKey().endsWith("D");
-            cell.setTextColor(selected?0xffffffff:(red?0xffff9999:0xffe9eef6));
-        }
-    }
-    private void saveHandEditor(){
-        if(draftHand.isEmpty()){
-            Toast.makeText(this,"Chưa chọn lá nào",Toast.LENGTH_SHORT).show();return;
-        }
-        // Cards are sorted for compact, stable persistence; mode/table settings remain unchanged.
-        ArrayList<String> sorted=new ArrayList<>(draftHand);
-        sorted.sort((a,b)->{int r=MonteCarloAdvisor.rank(a)-MonteCarloAdvisor.rank(b);
-            return r!=0?r:MonteCarloAdvisor.suit(a)-MonteCarloAdvisor.suit(b);});
-        synchronized(stateLock){
-            handCards.clear();handCards.addAll(sorted);
-            manualHandOverride=true;
-            getSharedPreferences("tracker_strategy",MODE_PRIVATE).edit().putString("hand_source","manual").apply();
-            persistCurrentHand();
-        }
-        refresh();
-        handEditor.setVisibility(View.GONE);
-        Toast.makeText(this,"Đã lưu "+sorted.size()+" lá. Gợi ý sẽ tự hiện khi đến lượt.",Toast.LENGTH_SHORT).show();
-    }
-
     /** User request starts a new read of hand, live board and count history.
      * No stored text from an earlier table position is used for advice.
      */
@@ -874,7 +869,7 @@ public final class CaptureService extends Service {
         if(scanned.equals(handCards))return false;
         // Never allow visible cards to conflict with known played cards.
         for(String c:scanned)if(played.contains(c))return false;
-        if(!conserved(scanned,played,knownCounts))return false;
+        if(!conserved(scanned,observedCards(),knownCounts))return false;
         // A hand successfully conserved across all 52 known cards is stronger
         // evidence than an older manual choice; reconcile without guessing.
         handCards.clear();handCards.addAll(scanned);
@@ -882,6 +877,13 @@ public final class CaptureService extends Service {
         persistCurrentHand();
         getSharedPreferences("tracker_strategy",MODE_PRIVATE).edit().putString("hand_source","auto").apply();
         return true;
+    }
+    /** Visible-but-not-yet-attributed cards are still known cards for conservation.
+     * Attribution to an opponent remains separate from deck integrity. */
+    private LinkedHashSet<String> observedCards(){
+        LinkedHashSet<String> visible=new LinkedHashSet<>(played);
+        visible.addAll(waitingCards);
+        return visible;
     }
     private static boolean conserved(Collection<String> hand,Collection<String> played,int[] counts){
         return CardStateValidator.complete(hand,played,counts);
@@ -902,7 +904,7 @@ public final class CaptureService extends Service {
             turn=myTurn;
             boardOK=boardStable;
             hand=new LinkedHashSet<>(handCards);
-            seen=new LinkedHashSet<>(played);
+            seen=observedCards();
             lead=new ArrayList<>(currentBoard);
             counts=knownCounts.clone();
             // Full saved verified play history of the current occupants.
@@ -944,6 +946,8 @@ public final class CaptureService extends Service {
         if(dismissSuggestion!=null)mainHandler.removeCallbacks(dismissSuggestion);
         suggestionText.setText(message);
         suggestionText.setTextColor(0xffffffff);
+        // Avoid overlapping multiple semi-transparent HUD windows over local cards.
+        if(panels[3]!=null)panels[3].setVisibility(View.GONE);
         suggestionPanel.setVisibility(View.VISIBLE);
     }
     private void showAdvice(MonteCarloAdvisor.Advice advice){
@@ -961,8 +965,12 @@ public final class CaptureService extends Service {
             advice.title.startsWith("BỎ")?0xffffdf94:0xffffffff);
         suggestionText.setText(highlight);
         if(dismissSuggestion!=null)mainHandler.removeCallbacks(dismissSuggestion);
+        if(panels[3]!=null)panels[3].setVisibility(View.GONE);
         suggestionPanel.setVisibility(View.VISIBLE);
-        dismissSuggestion=()->{if(suggestionPanel!=null)suggestionPanel.setVisibility(View.GONE);};
+        dismissSuggestion=()->{
+            if(suggestionPanel!=null)suggestionPanel.setVisibility(View.GONE);
+            if(panels[3]!=null)panels[3].setVisibility(View.VISIBLE);
+        };
         mainHandler.postDelayed(dismissSuggestion,5000);
     }
     private void placeSuggestionControls(){
@@ -974,8 +982,16 @@ public final class CaptureService extends Service {
             suggestButtonParams.x=dp(52);suggestButtonParams.y=dp(6);
         }
         if(suggestionPanelParams!=null){
-            suggestionPanelParams.width=Math.max(dp(170),Math.min(dp(345),(int)(screen*.46f)));
-            suggestionPanelParams.x=dp(53);suggestionPanelParams.y=dp(54);
+            android.util.DisplayMetrics dm2=new android.util.DisplayMetrics();
+            wm.getDefaultDisplay().getRealMetrics(dm2);
+            boolean landscape=dm2.widthPixels>dm2.heightPixels;
+            suggestionPanelParams.width=landscape?
+                Math.max(dp(165),Math.min(dp(360),(int)(screen*.37f))):
+                Math.max(dp(165),(int)(screen*.8f));
+            // During rescan show status by the LOCAL HAND, never over left player history.
+            suggestionPanelParams.x=landscape?(int)(screen*.30f):(int)(screen*.08f);
+            suggestionPanelParams.y=landscape?(int)(dm2.heightPixels*.55f):
+                (int)(dm2.heightPixels*.70f);
         }
     }
     private void placeResetButton(){
@@ -994,12 +1010,6 @@ public final class CaptureService extends Service {
         }
         placeSuggestionControls();
         if(suggestButton!=null&&suggestButtonParams!=null)try{wm.updateViewLayout(suggestButton,suggestButtonParams);}catch(Exception ignored){}
-        if(handButton!=null&&handButtonParams!=null)try{wm.updateViewLayout(handButton,handButtonParams);}catch(Exception ignored){}
-        if(handEditor!=null&&handEditorParams!=null){
-            handEditorParams.x=dp(5);
-            handEditorParams.y=dp(53);
-            try{wm.updateViewLayout(handEditor,handEditorParams);}catch(Exception ignored){}
-        }
         if(suggestionPanel!=null&&suggestionPanelParams!=null)try{wm.updateViewLayout(suggestionPanel,suggestionPanelParams);}catch(Exception ignored){}
     }
     private void sizeOverlayFonts(int w,int h){
@@ -1201,6 +1211,7 @@ public final class CaptureService extends Service {
     }
     @Override public void onDestroy(){
         stopping=true;
+        mainHandler.removeCallbacks(captureWatchdog);
         adviceExecutor.shutdownNow();
         if(imageReader!=null){imageReader.setOnImageAvailableListener(null,null);}
         if(virtualDisplay!=null){virtualDisplay.release();virtualDisplay=null;}
@@ -1217,10 +1228,6 @@ public final class CaptureService extends Service {
         if(dismissSuggestion!=null)mainHandler.removeCallbacks(dismissSuggestion);
         if(wm!=null&&suggestButton!=null)try{wm.removeView(suggestButton);}catch(Exception ignored){}
         if(wm!=null&&suggestionPanel!=null)try{wm.removeView(suggestionPanel);}catch(Exception ignored){}
-        if(wm!=null&&handButton!=null)try{wm.removeView(handButton);}catch(Exception ignored){}
-        if(wm!=null&&handEditor!=null)try{wm.removeView(handEditor);}catch(Exception ignored){}
-        handButton=null;handEditor=null;handCount=null;handCells.clear();draftHand.clear();
-        handButtonParams=null;handEditorParams=null;
         suggestButton=null;suggestButtonParams=null; suggestionText=null;suggestionPanel=null;suggestionPanelParams=null;
         Arrays.fill(playerRows,null);
         handRow=null;otherRow=null;remainingRow=null;status=null;

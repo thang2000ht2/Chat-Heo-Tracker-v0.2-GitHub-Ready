@@ -1,9 +1,9 @@
-# Biên dịch Chặt Heo Tracker v1.6 qua GitHub Actions
+# GitHub Actions — v1.7
 
-1. Giải nén `ChatHeoTracker_v1.6_OfflineLearning_GitHub.zip`.
-2. Đưa toàn bộ **nội dung** thư mục vào repository GitHub cũ, gồm `.github/workflows/build-apk.yml` (thư mục có dấu chấm đầu). **Thay toàn bộ các file phiên bản cũ**, không chỉ bổ sung Java mới.
-3. Mở **Actions → Build Chặt Heo Tracker APK → Run workflow**.
-4. Workflow kiểm thử **10 nhóm Java** rồi thực hiện `:app:assembleDebug`. Chỉ khi dòng `Build debug APK` thành công mới lấy artifact `ChatHeoTracker-v1.6-learning-players-apk`, giải nén để có `app-debug.apk`.
-5. Nếu gặp lỗi, mở job có dấu X và gửi log từ dòng `error:` đầu tiên trở đi.
+1. Giải nén ZIP vào máy, chọn mọi file và thư mục **bên trong**, bao gồm thư mục ẩn `.github`.
+2. Tải lên repository GitHub (tốt nhất để Private).
+3. Chọn **Actions → Build Chặt Heo Tracker APK → Run workflow**.
+4. Chờ kiểm thử pure-Java và `Build debug APK` thành công; tải Artifact `ChatHeoTracker-v1.7-stable-hud-offline-apk`.
+5. Giải nén artifact và cài `app-debug.apk` lên điện thoại.
 
-**Chưa được biên dịch/kiểm thử trên Xiaomi 17 Pro Max trong môi trường tạo file**. Những mô phỏng chỉ mang tính ước lượng, không chứng minh bài trên tay đối thủ. Không cần token, dịch vụ AI hay quyền Internet.
+Lưu ý: ứng dụng chưa được biên dịch bằng Android SDK và thử trực tiếp trong môi trường tạo gói này. Nếu Actions báo đỏ, hãy gửi ảnh và đoạn lỗi gần dòng đầu tiên trong mục `Build debug APK`. Tránh đăng log có thông tin nhạy cảm.
