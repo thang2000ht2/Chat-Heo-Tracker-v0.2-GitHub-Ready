@@ -21,3 +21,7 @@ Bản mã nguồn Android thử nghiệm, chạy tính toán trên điện tho�
 1. Nhìn nhãn nhỏ bên cạnh Gợi ý: `mất khung hình` = quyền/luồng MediaProjection; `không thấy quạt bài` = giao diện/tọa độ khác ảnh mẫu; `n lá` = đọc được một phần; `lệch dữ liệu` = bài tay/lịch sử/số bài đối thủ chưa khớp.
 2. Gửi ảnh chụp cả màn hình **khi vẫn bật Tracker**, tốt nhất lúc mới chia 13 lá. Ảnh này giúp căn đúng HUD và tọa độ quạt bài đang chạy trên máy thật.
 3. Nếu cần log kỹ thuật: bật USB debugging trên Android và chạy `adb logcat -d -s Tracker TrackerHand` từ máy tính. Không gửi thông tin nhạy cảm có trong log khác.
+
+
+## v1.9
+See [README_V1_9.md](README_V1_9.md) for scanner recovery, partial public history, and independent heo warning.

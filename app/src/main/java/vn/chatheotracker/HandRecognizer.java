@@ -37,9 +37,15 @@ final class HandRecognizer {
         final List<String> cards;
         final boolean complete;
         final String diagnosis;
+        final List<String> slots;
+        final int fanCount, fanStart;
         Result(List<String> cards, boolean complete){this(cards,complete,complete?"OK":"CHƯA RÕ");}
         Result(List<String> cards, boolean complete,String diagnosis){
+            this(cards,complete,diagnosis,Collections.emptyList(),0,-1);
+        }
+        Result(List<String> cards, boolean complete,String diagnosis,List<String> slots,int count,int start){
             this.cards=cards;this.complete=complete;this.diagnosis=diagnosis;
+            this.slots=slots;this.fanCount=count;this.fanStart=start;
         }
     }
     /** Full initial hand and later short hands share a single geometry search.
@@ -75,26 +81,30 @@ final class HandRecognizer {
         for(int dx:new int[]{0,-3,3,-6,6}){
             for(int dy:new int[]{0,-2,2}){
                 int x0=best.left-3+dx;
-                int top=best.row-5+dy; // y=715 maps to reference top=710
-                ArrayList<String> cards=new ArrayList<>();
+                int top=best.row-5+dy;
+                ArrayList<String> visible=new ArrayList<>();
+                ArrayList<String> slots=new ArrayList<>();
                 String failure="KHÔNG ĐỌC RÕ GÓC BÀI";
                 for(int i=0;i<best.count;i++){
+                    String card=null;
                     int x=x0+(int)Math.round(i*94.6);
                     boolean[][] rank=extract(b,x+9,top+11,x+73,top+67,32,40,true);
                     boolean[][] suit=extract(b,x+8,top+71,x+69,top+129,28,28,false);
-                    if(rank==null||suit==null){failure="GÓC BÀI BỊ CHE";break;}
-                    Match r=classify(rank,rankTemplates),s=classify(suit,suitTemplates);
-                    // Video compression softens the edges. Slightly relaxed thresholds
-                    // paired with a unique-card gate and three stable screen frames.
-                    if(r.score<0.79 || r.margin<0.022 || s.score<0.84 || s.margin<0.014){
-                        failure="MẶT BÀI CHƯA RÕ";break;
+                    if(rank==null || suit==null)failure="GÓC BÀI BỊ CHE";
+                    else{
+                        Match r=classify(rank,rankTemplates),st=classify(suit,suitTemplates);
+                        if(r.score>=.79 && r.margin>=.022 && st.score>=.84 && st.margin>=.014){
+                            String candidate=r.label+st.label;
+                            if(!visible.contains(candidate)){card=candidate;visible.add(card);}
+                            else failure="BÀI TRÙNG – QUÉT LẠI";
+                        }else failure="MẶT BÀI CHƯA RÕ";
                     }
-                    String card=r.label+s.label;
-                    if(cards.contains(card)){failure="BÀI TRÙNG – QUÉT LẠI";break;}
-                    cards.add(card);
+                    slots.add(card);
                 }
-                if(cards.size()==best.count)return new Result(cards,true,"OK");
-                if(cards.size()>partial.cards.size())partial=new Result(cards,false,failure);
+                if(visible.size()==best.count)
+                    return new Result(visible,true,"OK",slots,best.count,best.left);
+                if(visible.size()>partial.cards.size())
+                    partial=new Result(visible,false,failure,slots,best.count,best.left);
             }
         }
         return partial;

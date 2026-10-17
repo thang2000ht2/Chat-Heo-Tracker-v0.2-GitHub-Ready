@@ -6,8 +6,8 @@ android {
         applicationId 'vn.chatheotracker'
         minSdk 29
         targetSdk 35
-        versionCode 18
-        versionName '1.8-scan-fix' 
+        versionCode 19
+        versionName '1.9-recovery' 
     }
     buildTypes { release { minifyEnabled false } }
     compileOptions {

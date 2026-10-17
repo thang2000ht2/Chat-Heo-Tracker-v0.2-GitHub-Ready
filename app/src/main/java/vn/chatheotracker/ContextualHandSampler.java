@@ -49,6 +49,24 @@ final class ContextualHandSampler {
         for(int p=0;p<3;p++)if(free[p]!=0)throw new IllegalStateException("Partition mismatch");
         return result;
     }
+    /** When some already-played cards were never seen, allocate only the visible
+     * opponent counts, while reserving the other unseen cards as UNKNOWN/SPENT.
+     * Do not claim those residual cards are in any opponent hand.
+     */
+    static List<List<String>> drawWithUnobserved(Collection<String> unseen,int[] remaining,
+                                                  OpponentBehaviorModel.Profile[] profiles,Random rng){
+        if(unseen==null||remaining==null||remaining.length!=3||rng==null)
+            throw new IllegalArgumentException("Bad missing-history sample");
+        int count=0;
+        for(int c:remaining){if(c<0||c>13)throw new IllegalArgumentException("Bad count");count+=c;}
+        if(count>unseen.size() || new HashSet<>(unseen).size()!=unseen.size())
+            throw new IllegalArgumentException("Impossible missing history");
+        ArrayList<String> shuffled=new ArrayList<>(unseen);
+        Collections.shuffle(shuffled,rng);
+        // Unknown already-played cards are uniformly sampled away first.
+        // Then assign the remaining cards with the same behavior-weighted sampler.
+        return draw(shuffled.subList(0,count),remaining,profiles,rng);
+    }
     static double contextMultiplier(int[] already, int rank, OpponentBehaviorModel.Profile profile){
         if(profile==null || profile.moves<2)return 1.0;
         // Require evidence before biasing hidden cards; cap it to prevent

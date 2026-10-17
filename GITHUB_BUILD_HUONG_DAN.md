@@ -13,3 +13,7 @@ Lưu ý: ứng dụng chưa được biên dịch bằng Android SDK và thử t
 - Gói phát hành: `ChatHeoTracker-v1.8-scan-fix-compact-ai-apk`
 - Đã thêm TestHandFanGeometry / TestResidualHandQuality, xuất APK sau khi test thuần Java qua.
 - Đây vẫn là dự án nguồn chưa thử build Android trực tiếp trên Xiaomi.
+
+
+### v1.9 build notes
+The workflow runs `TestPartialHistoryRecovery` plus the prior pure-Java tests. If build fails after the test stage, copy the first Java/Gradle error and share it. The debug artifact is `ChatHeoTracker-v1.9-recovery-ai-warning-apk`.

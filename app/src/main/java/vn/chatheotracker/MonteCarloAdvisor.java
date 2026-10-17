@@ -354,7 +354,11 @@ final class MonteCarloAdvisor {
         for(Move m:moves)if(lead==null||beats(m,lead))options.add(new Choice(m));
         if(options.isEmpty())return new Advice("BỎ LƯỢT","");
         ArrayList<String> hidden=hiddenCards(hand,seen,table);
-        if(!validCountPartition(counts,hidden.size()))return new Advice("QUÉT LẠI BÀI VÀ LỊCH SỬ","");
+        HashSet<String> allSeen=new HashSet<>(seen==null?Collections.emptyList():seen);
+        if(table!=null)allSeen.addAll(table);
+        PartialDeckState.Result integrity=PartialDeckState.check(hand,allSeen,counts);
+        if(!integrity.feasible || integrity.missing>24)
+            return new Advice("QUÉT LẠI BÀI VÀ LỊCH SỬ","");
         OpponentBehaviorModel.Profile[] profiles=OpponentBehaviorModel.fromHistory(histories);
         double[] answerTotals=new double[options.size()];
         double[] chopTotals=new double[options.size()];
@@ -365,7 +369,9 @@ final class MonteCarloAdvisor {
         for(String card:hand)if(rank(card)==12)myHeo=true;
         Random random=new Random(seed(hand,table,seen,counts)^0xBADCA12L);
         for(int trial=0;trial<DEALS;trial++){
-            List<List<String>> opponentHands=ContextualHandSampler.draw(hidden,counts,profiles,random);
+            List<List<String>> opponentHands=integrity.exact
+                ? ContextualHandSampler.draw(hidden,counts,profiles,random)
+                : ContextualHandSampler.drawWithUnobserved(hidden,counts,profiles,random);
             int[][] opp=new int[3][13],suits=new int[3][13];
             for(int p=0;p<3;p++)Arrays.fill(suits[p],-1);
             for(int p=0;p<3;p++){
@@ -429,6 +435,11 @@ final class MonteCarloAdvisor {
             // blocking, chops and opponents about to finish as additional costs.
             double cost=FinishPriority.cost(remainingTurns,after,c.move.count,
                 reply,chop,minOpp,mode);
+            // A short path that never regains the lead isn't necessarily a fast finish.
+            // Weight future control more when close to going out: tempo matters.
+            if(remainingTurns<=2)cost-=0.35*(1-risk);
+            if(c.move.count==hand.size())cost-=5.0; // a legal immediate finish
+
             // Compare the hand SHAPE after the proposed play, not just the count.
             // Unrelated small singles and poor re-entry control are worse than
             // coherent future pairs/straights, especially in ranked placement mode.
@@ -445,7 +456,9 @@ final class MonteCarloAdvisor {
         int pct=(int)Math.round(100*selected.response);
         String title="ĐÁNH "+render(selected.move);
         int winningIndex=options.indexOf(selected);
-        String detail="≈"+pct+"% mức chặn ước tính (offline) · Trên "
+        String detail="≈"+pct+"% mức chặn ước tính (offline"+
+            (integrity.missing>0?", thiếu "+integrity.missing+" lá lịch sử"+
+                (integrity.missing>12?", tin cậy thấp":""):"")+") · Trên "
             +Math.round(100*individualTotals[winningIndex][0]/DEALS)+"% · Trái "
             +Math.round(100*individualTotals[winningIndex][1]/DEALS)+"% · Phải "
             +Math.round(100*individualTotals[winningIndex][2]/DEALS)+"%";
@@ -453,7 +466,7 @@ final class MonteCarloAdvisor {
             int danger=(int)Math.round(100*heoChopTotal/DEALS);
             // Alert when plausible chopping hands exist, especially near endgame;
             // estimate is about *attempting a heo play*, not every current move.
-            if(danger>=12){
+            if(danger>=5){
                 detail+="\n⚠ HEO: nguy cơ bị chặt ≈"+danger+"% nếu đánh 2";
             }
         }

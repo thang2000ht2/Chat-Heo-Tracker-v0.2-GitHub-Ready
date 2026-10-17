@@ -37,7 +37,12 @@ public final class TestOpponentBehavior {
         ok(advice.detail.contains("mức chặn ước tính"),"risk must be labelled heuristic");
         MonteCarloAdvisor.Advice invalid=MonteCarloAdvisor.adviseBehaviorAware(mine,
             Collections.emptyList(),Collections.emptyList(),new int[]{12,13,13},emptyHistory(),StrategyMode.PLACEMENT);
-        ok(invalid.title.startsWith("QUÉT LẠI"),"stale hand/count mismatch is rejected");
+        ok(invalid.title.startsWith("ĐÁNH") && invalid.detail.contains("thiếu 1 lá lịch sử"),
+            "missing public history is handled without inventing the card");
+        MonteCarloAdvisor.Advice impossible=MonteCarloAdvisor.adviseBehaviorAware(mine,
+            Collections.emptyList(),Collections.singletonList("4D"),
+            new int[]{13,13,13},emptyHistory(),StrategyMode.PLACEMENT);
+        ok(impossible.title.startsWith("QUÉT LẠI"),"an impossible total still blocks suggestions");
         MonteCarloAdvisor.Advice noHeo=MonteCarloAdvisor.adviseBehaviorAware(
             hand("3S 3C 4H 5S 5C 6S 7H 8H 9S 10C JC QC KH"),
             Collections.emptyList(),Collections.emptyList(),new int[]{13,13,13},emptyHistory(),StrategyMode.PLACEMENT);

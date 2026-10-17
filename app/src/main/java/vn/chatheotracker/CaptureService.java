@@ -78,6 +78,7 @@ public final class CaptureService extends Service {
     private CardRecognizer recognizer;
     private CountRecognizer countRecognizer;
     private HandRecognizer handRecognizer;
+    private final TemporalHandEvidence fusedHand=new TemporalHandEvidence();
     private final LinkedHashSet<String> handCards=new LinkedHashSet<>();
     private final LinkedHashSet<String> myPlayed=new LinkedHashSet<>();
     private String handPending="";
@@ -326,7 +327,11 @@ public final class CaptureService extends Service {
             if(readHand){
                 // Full and partial fans now share one recognizer. Calling both used
                 // to repeat costly image processing on every unsuccessful frame.
-                myCards=handRecognizer.recognizeVisibleHand(normalized);
+                HandRecognizer.Result raw=handRecognizer.recognizeVisibleHand(normalized);
+                // Integrate corners that were visible in different frames rather
+                // than rejecting a full hand when chat obscures one frame.
+                List<String> fused=fusedHand.accept(raw.slots,raw.fanCount,raw.fanStart);
+                myCards=fused.isEmpty()?raw:new HandRecognizer.Result(fused,true,"GHÉP NHIỀU KHUNG");
             }
             normalized.recycle();
             lastFrameDecoded=SystemClock.elapsedRealtime();
@@ -359,8 +364,10 @@ public final class CaptureService extends Service {
                     autoAdviceScanFrames++;
                     // At least three post-turn frames for screen / card history stabilization.
                     // If counters/hand still mismatch, keep scanning for up to ~3 seconds.
+                    PartialDeckState.Result deck=PartialDeckState.check(
+                        handCards,observedCards(),knownCounts);
                     boolean ready=boardStable && !handCards.isEmpty() &&
-                        conserved(handCards,observedCards(),knownCounts) &&
+                        deck.feasible && deck.missing<=24 &&
                         (visualHandTrusted||manualHandOverride||!handPending.isEmpty());
                     if((ready&&autoAdviceScanFrames>=2)||autoAdviceScanFrames>=22){
                         autoAdvicePending=false;trySuggestion=true;
@@ -378,9 +385,12 @@ public final class CaptureService extends Service {
                 String state;
                 synchronized(stateLock){
                     if(!handCards.isEmpty()){
-                        if(conserved(handCards,observedCards(),knownCounts))
-                            state=handCards.size()+" lá ✓";
-                        else state=handCards.size()+" lá · lệch dữ liệu";
+                        PartialDeckState.Result check=PartialDeckState.check(
+                            handCards,observedCards(),knownCounts);
+                        if(check.exact)state=handCards.size()+" lá ✓";
+                        else if(check.feasible)
+                            state=handCards.size()+" lá · thiếu lịch sử "+check.missing;
+                        else state=handCards.size()+" lá · chưa đối soát";
                     }else if(myCards!=null){
                         state=myCards.complete?(myCards.cards.size()+" lá · chưa đồng bộ"):
                             (myCards.cards.size()+" lá · "+myCards.diagnosis);
@@ -389,7 +399,14 @@ public final class CaptureService extends Service {
                 setScanStatus(state);
             }
             if(changed)mainHandler.post(this::refresh);
-            if(turnBegan)mainHandler.post(()->showPendingAdvice("ĐANG QUÉT BÀI…"));
+            if(turnBegan){
+                final String warning;
+                synchronized(stateLock){warning=HeoWarningAdvisor.warning(handCards,observedCards());}
+                mainHandler.post(()->{
+                    showPendingAdvice("ĐANG QUÉT BÀI…");
+                    if(!warning.isEmpty())showUrgentHeoWarning(warning);
+                });
+            }
             if(turnEnded)mainHandler.post(()->{
                 if(dismissSuggestion!=null)mainHandler.removeCallbacks(dismissSuggestion);
                 if(suggestionPanel!=null)suggestionPanel.setVisibility(View.GONE);
@@ -647,6 +664,7 @@ public final class CaptureService extends Service {
         }
         played.clear();otherPlayed.clear();waitingCards.clear();cardMoves.clear();countDrops.clear();
         handCards.clear();myPlayed.clear();handPending="";handPendingFrames=0;
+        fusedHand.clear();
         manualHandOverride=false;
         suggestRequested=false;suggestionScanFrames=0;
         autoAdvicePending=false;autoAdviceScanFrames=0;
@@ -686,7 +704,7 @@ public final class CaptureService extends Service {
         setScanStatus("quét lại");
         synchronized(stateLock){
             recentCards.clear();
-            handPending="";handPendingFrames=0;
+            handPending="";handPendingFrames=0;fusedHand.clear();
             visualCandidate="";visualFrames=0;visualHandTrusted=false;
             boardCandidate="";boardFrames=0;boardStable=false;
             lastScanned=0;
@@ -931,9 +949,17 @@ public final class CaptureService extends Service {
         visualHandTrusted=true;lastVisualHandSize=cards.size();
         LinkedHashSet<String> scanned=new LinkedHashSet<>(cards);
         if(scanned.equals(handCards))return false;
+        // Before the first verified local play, an apparent 8-12 card fan is
+        // frequently a partially occluded 13-card hand. Do not promote it.
+        if(handCards.isEmpty() && myPlayed.isEmpty() && scanned.size()!=13)return false;
         // Never allow visible cards to conflict with known played cards.
         for(String c:scanned)if(played.contains(c))return false;
-        if(!conserved(scanned,observedCards(),knownCounts))return false;
+        PartialDeckState.Result deck=PartialDeckState.check(
+            scanned,observedCards(),knownCounts);
+        if(!deck.feasible)return false;
+        // The visible hand may be valid even when a few earlier plays were
+        // missed; do not prevent recovery just because the history is partial.
+
         // A hand successfully conserved across all 52 known cards is stronger
         // evidence than an older manual choice; reconcile without guessing.
         handCards.clear();handCards.addAll(scanned);
@@ -963,6 +989,7 @@ public final class CaptureService extends Service {
         final int[] counts;
         final List<List<List<String>>> histories=new ArrayList<>();
         final boolean turn,boardOK,consistent,handOK;
+        final int missingHistory;
         final int epoch,request;
         synchronized(stateLock){
             turn=myTurn;
@@ -974,17 +1001,23 @@ public final class CaptureService extends Service {
             // Full saved verified play history of the current occupants.
             // Do not infer an unobserved pass or secretly see hidden hands.
             for(LearnedOpponentHistory h:learning)histories.add(h.snapshot());
-            consistent=conserved(hand,seen,counts);
-            handOK=!hand.isEmpty() && (visualHandTrusted ? lastVisualHandSize==hand.size()
-                : !handPending.isEmpty()||manualHandOverride);
+            PartialDeckState.Result check=PartialDeckState.check(hand,seen,counts);
+            consistent=check.feasible && check.missing<=24;
+            missingHistory=check.missing;
+            // A visually confirmed full fan remains usable even when played
+            // cards were missed; only overlapping/impossible cards invalidate it.
+            handOK=!hand.isEmpty() && (visualHandTrusted || !handPending.isEmpty()
+                || manualHandOverride);
             epoch=turnEpoch;
             request=++adviceRequestId;
         }
         adviceExecutor.execute(()->{
             final MonteCarloAdvisor.Advice result;
+            final String heoWarning=HeoWarningAdvisor.warning(hand,seen);
             if(!turn)result=new MonteCarloAdvisor.Advice("CHƯA ĐẾN LƯỢT","");
             else if(!boardOK)result=new MonteCarloAdvisor.Advice("QUÉT LẠI BÀI GIỮA BÀN","");
-            else if(!handOK||!consistent)result=new MonteCarloAdvisor.Advice("QUÉT LẠI BÀI VÀ LỊCH SỬ","");
+            else if(!handOK||!consistent)result=new MonteCarloAdvisor.Advice(
+                "QUÉT LẠI BÀI VÀ LỊCH SỬ","");
             else {
                 MonteCarloAdvisor.Advice computed;
                 try {
@@ -1001,7 +1034,7 @@ public final class CaptureService extends Service {
                 synchronized(stateLock){
                     if(stopping || !myTurn || turnEpoch!=epoch || adviceRequestId!=request)return;
                 }
-                showAdvice(result);
+                showAdvice(result,heoWarning);
             });
         });
     }
@@ -1009,15 +1042,27 @@ public final class CaptureService extends Service {
         // Never put the scanner placeholder over cards, opponents or controls.
         setScanStatus("đang xử lý");
     }
-    private void showAdvice(MonteCarloAdvisor.Advice advice){
+    private void showUrgentHeoWarning(String text){
+        if(suggestionPanel==null||suggestionText==null)return;
+        suggestionText.setTextColor(0xffff8888);
+        suggestionText.setText(text);
+        if(dismissSuggestion!=null)mainHandler.removeCallbacks(dismissSuggestion);
+        suggestionPanel.setVisibility(View.VISIBLE);
+        dismissSuggestion=()->{if(suggestionPanel!=null)suggestionPanel.setVisibility(View.GONE);};
+        mainHandler.postDelayed(dismissSuggestion,5000);
+    }
+    private void showAdvice(MonteCarloAdvisor.Advice advice,String warning){
         if(suggestionPanel==null||suggestionText==null)return;
         if(advice.title.startsWith("QUÉT LẠI")){
             setScanStatus("thiếu bài / lịch sử");
-            if(suggestionPanel!=null)suggestionPanel.setVisibility(View.GONE);
+            if(warning!=null && !warning.isEmpty())showUrgentHeoWarning(warning);
+            else if(suggestionPanel!=null)suggestionPanel.setVisibility(View.GONE);
             return;
         }
         setScanStatus("đã xử lý");
         String displayed=advice.title+(advice.detail.isEmpty()?"":"\n"+advice.detail);
+        if(warning!=null && !warning.isEmpty() && !displayed.contains("⚠ HEO"))
+            displayed+="\n"+warning;
         SpannableStringBuilder highlight=new SpannableStringBuilder(displayed);
         int warningStart=displayed.indexOf("⚠ HEO");
         if(warningStart>=0){
