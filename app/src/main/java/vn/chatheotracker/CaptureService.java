@@ -49,7 +49,9 @@ public final class CaptureService extends Service {
     private final WindowManager.LayoutParams[] panelParams=new WindowManager.LayoutParams[4];
     private final TextView[] playerRows=new TextView[3];
     private final TextView[] threatRows=new TextView[3];
-    private final String[] threatLabels={"", "", ""};
+    private final String[] threatLabels={"3ĐT — · 4ĐT — · TQ —", "3ĐT — · 4ĐT — · TQ —", "3ĐT — · 4ĐT — · TQ —"};
+    private final List<ObservedPass>[] confirmedPasses=new List[]{new ArrayList<>(),new ArrayList<>(),new ArrayList<>()};
+    private boolean threatDirty=true;
     private long lastThreatScan=0L;
     private int threatEpoch=0;
     private TextView handRow, otherRow, remainingRow;
@@ -197,6 +199,16 @@ public final class CaptureService extends Service {
                         "lead",new ArrayList<>(currentBoard),
                         "opponent_counts",knownCounts.clone(),
                         "confidence","user_confirmed", "source","user_confirmation");
+                    if(knownCounts[seat]>=0){
+                        List<ObservedPass> history=confirmedPasses[seat];
+                        // Avoid double counting repeated button taps on the same lead.
+                        if(history.isEmpty() || !history.get(history.size()-1).lead.equals(currentBoard)
+                                || history.get(history.size()-1).countAtPass!=knownCounts[seat]){
+                            history.add(new ObservedPass(currentBoard,knownCounts[seat]));
+                            if(history.size()>8)history.remove(0);
+                            threatDirty=true;
+                        }
+                    }
                 }
             }
             if(projection==null)stopSelf();
@@ -449,8 +461,21 @@ public final class CaptureService extends Service {
                 }
                 setScanStatus(state);
             }
-            if(changed)mainHandler.post(this::refresh);
-            if(changed && now-lastThreatScan>7000){lastThreatScan=now;scheduleThreatSnapshot();}
+            if(changed){
+                synchronized(stateLock){threatDirty=true;}
+                mainHandler.post(this::refresh);
+            }
+            boolean shouldSnapshot=false;
+            synchronized(stateLock){
+                // Late-game card counts are more informative: recompute promptly.
+                boolean endgame=false;
+                for(int c:knownCounts)if(c>=0 && c<=5)endgame=true;
+                long delay=endgame?300:1100;
+                if(threatDirty && now-lastThreatScan>=delay){
+                    threatDirty=false;lastThreatScan=now;shouldSnapshot=true;
+                }
+            }
+            if(shouldSnapshot)scheduleThreatSnapshot();
             if(turnBegan)mainHandler.post(()->showPendingAdvice("ĐANG QUÉT BÀI…"));
             if(turnEnded)mainHandler.post(()->{
                 if(dismissSuggestion!=null)mainHandler.removeCallbacks(dismissSuggestion);
@@ -527,6 +552,7 @@ public final class CaptureService extends Service {
             int before=knownCounts[i];
             knownCounts[i]=count;
             if(before!=count){
+                changed=true;
                 trainEvent("opponent_count","seat",i,"before",before,"after",count,
                     "confidence","stable_two_frames");
             }
@@ -699,6 +725,7 @@ public final class CaptureService extends Service {
                 // player leaves: they are part of the same 52-card deck. The
                 // next confirmed deal will clear these visual round rows.
                 knownCounts[i]=-1;lastCandidates[i]=-1;candidateFrames[i]=0;
+                confirmedPasses[i].clear();threatDirty=true;
                 for(int k=countDrops.size()-1;k>=0;k--)if(countDrops.get(k).player==i)countDrops.remove(k);
                 adviceRequestId++;autoAdvicePending=myTurn;
                 autoAdviceScanFrames=0;
@@ -707,6 +734,7 @@ public final class CaptureService extends Service {
                 // Restore a previously seen player if they returned to this seat.
                 trainingArchive.remember(oldIdentity,learning[i]);
                 learning[i]=trainingArchive.restore(seatIdentity[i].active());
+                confirmedPasses[i].clear();threatDirty=true;
                 changed=true;
             }
             persistIdentity(i);
@@ -743,8 +771,9 @@ public final class CaptureService extends Service {
         Arrays.fill(knownCounts,-1);Arrays.fill(lastCandidates,-1);
         Arrays.fill(candidateFrames,0);Arrays.fill(missingCards,0);
         recentCards.clear();sawAnyLowerCounter=false;
-        threatEpoch++;lastThreatScan=0;
-        Arrays.fill(threatLabels,"");
+        threatEpoch++;lastThreatScan=0;threatDirty=true;
+        for(List<ObservedPass> l:confirmedPasses)l.clear();
+        Arrays.fill(threatLabels,"3ĐT — · 4ĐT — · TQ —");
         redealDetector.clear();
         getSharedPreferences("tracker_strategy",MODE_PRIVATE).edit().remove("hand").remove("table").remove("hand_source").apply();
         mainHandler.post(()->{
@@ -837,24 +866,37 @@ public final class CaptureService extends Service {
         final LinkedHashSet<String> mine,seen;
         final int[] counts;
         final List<List<List<String>>> history=new ArrayList<>();
+        final List<List<ObservedPass>> passHistory=new ArrayList<>();
         final int version;
         synchronized(stateLock){
             mine=new LinkedHashSet<>(handCards);
             seen=observedCards();counts=knownCounts.clone();
             for(LearnedOpponentHistory h:learning)history.add(h.snapshot());
+            for(List<ObservedPass> events:confirmedPasses)passHistory.add(new ArrayList<>(events));
             version=++threatEpoch;
         }
         adviceExecutor.execute(()->{
             ThreatScenarioSampler.Seat[] estimate=null;
-            try{estimate=ThreatScenarioSampler.sample(mine,seen,counts,history,
-                Objects.hash(mine,seen,Arrays.hashCode(counts)));}
+            try{estimate=ThreatScenarioSampler.sample(mine,seen,counts,history,passHistory,
+                Objects.hash(mine,seen,Arrays.hashCode(counts),passHistory.size()));}
             catch(IllegalArgumentException ignored){}
             final ThreatScenarioSampler.Seat[] values=estimate;
             mainHandler.post(()->{
                 synchronized(stateLock){
                     if(stopping || version!=threatEpoch)return;
                     for(int k=0;k<3;k++){
-                        threatLabels[k]=values==null?"":values[k].concise();
+                        threatLabels[k]=values==null?"3ĐT — · 4ĐT — · TQ —":values[k].concise();
+                        if(values!=null){
+                            // Predictions are stored separately from actual observed plays.
+                            // They are NOT ground-truth labels for model training.
+                            trainEvent("threat_sample","seat",k,
+                                "sample_3_pair_run_percent",values[k].percent(0),
+                                "sample_4_pair_run_percent",values[k].percent(1),
+                                "sample_quartet_percent",values[k].percent(2),
+                                "sample_count",values[k].samples,
+                                "opponent_remaining",counts[k],
+                                "confidence",values[k].lowConfidence?"weak_prior":"model_only_not_calibrated");
+                        }
                     }
                 }
                 refresh();
@@ -871,7 +913,7 @@ public final class CaptureService extends Service {
             threatRows[i].setTextColor(0xffc4e6f5);
             threatRows[i].setVisibility(View.GONE);
             layout.addView(threatRows[i]);
-            layout.setVisibility(View.GONE); // Hide players with no detected plays.
+            // Show compact combination estimates even before anyone has played.
             panels[i]=layout;
         }
         // Keep only data-bearing rows. Unseen ranks already include the total count.
