@@ -40,10 +40,12 @@ public final class TestPartialHistoryRecovery {
         }
         check(evidence.accept(all,13,410).size()==13,"Occluded positions recovered across frames");
         check(evidence.accept(all,13,440).isEmpty(),"Moving fan resets votes");
-        check(!HeoWarningAdvisor.warning(Arrays.asList("3S","4S"),Collections.emptyList()).contains("HEO"),
-            "Warn only when hand has a two");
-        check(HeoWarningAdvisor.warning(Arrays.asList("2H"),Collections.emptyList()).contains("HEO"),
-            "Heo structural warning independent of strict accounting");
+        check(HeoWarningAdvisor.warningForMove(Arrays.asList("3S","4S"),Collections.emptyList(),0.8).isEmpty(),
+            "Do not warn without playing a heo");
+        check(HeoWarningAdvisor.warningForMove(Arrays.asList("2H"),Arrays.asList("JS","JC"),0.8).isEmpty(),
+            "Single heo cannot answer an opponent pair");
+        check(HeoWarningAdvisor.warningForMove(Arrays.asList("2H"),Arrays.asList("AS"),0.25).contains("25%"),
+            "Give estimated chop risk only for proposed heo play");
         System.out.println("TestPartialHistoryRecovery OK");
     }
 }

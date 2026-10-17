@@ -343,6 +343,44 @@ final class MonteCarloAdvisor {
         MonteCarloAdvisor engine=new MonteCarloAdvisor(mine);
         return engine.behaviorAware(table,seen,counts,histories,mode==null?StrategyMode.PLACEMENT:mode);
     }
+    /** Conservative advice when count/history reconciliation is incomplete.
+     * Uses only a verified visible hand and a confirmed public lead; does not
+     * invent a block percentage or any unseen opponent cards. */
+    static Advice adviseWithIncompleteHistory(Collection<String> mine,Collection<String> table,
+                                              Collection<String> seen,StrategyMode mode){
+        if(mine==null || mine.isEmpty() || mine.size()>13 ||
+            new HashSet<>(mine).size()!=mine.size() || !validCards(mine))
+            return new Advice("QUÉT LẠI BÀI TAY","");
+        HashSet<String> overlap=new HashSet<>(mine);
+        if(seen!=null)overlap.retainAll(seen);
+        if(!overlap.isEmpty())return new Advice("QUÉT LẠI BÀI TAY","");
+        if(table!=null){
+            overlap=new HashSet<>(mine);overlap.retainAll(table);
+            if(!overlap.isEmpty())return new Advice("QUÉT LẠI BÀI GIỮA BÀN","");
+        }
+        MonteCarloAdvisor engine=new MonteCarloAdvisor(mine);
+        Move lead=table==null || table.isEmpty()?null:classifyCards(table);
+        if(table!=null && !table.isEmpty() && lead==null)
+            return new Advice("QUÉT LẠI BÀI GIỮA BÀN","");
+        Move best=null;
+        double bestCost=Double.POSITIVE_INFINITY;
+        int all=(1<<engine.hand.size())-1;
+        for(Move move:engine.moves){
+            if(lead!=null && !beats(move,lead))continue;
+            int after=all^move.mask;
+            ArrayList<String> remainder=new ArrayList<>();
+            for(int i=0;i<engine.hand.size();i++)if((after&(1<<i))!=0)
+                remainder.add(engine.hand.get(i));
+            double cost=engine.minTurns[after]*8 +
+                ResidualHandQuality.penalty(remainder)*0.55 - move.count*0.35;
+            if(move.containsTwo && after!=0)cost+=3.0;
+            if(after==0)cost-=12.0;
+            if(cost<bestCost){bestCost=cost;best=move;}
+        }
+        if(best==null)return new Advice("BỎ LƯỢT","Chặn: chưa đủ dữ liệu");
+        return new Advice("ĐÁNH "+engine.render(best),"Chặn: chưa đủ dữ liệu (ước tính tạm)");
+    }
+
     private Advice behaviorAware(Collection<String> table,Collection<String> seen,int[] counts,
                                  List<List<List<String>>> histories,StrategyMode mode){
         Move lead=null;
@@ -364,9 +402,6 @@ final class MonteCarloAdvisor {
         double[] chopTotals=new double[options.size()];
         // Conditional response-risk indices per seat, not only the combined risk.
         double[][] individualTotals=new double[options.size()][3];
-        double heoChopTotal=0;
-        boolean myHeo=false;
-        for(String card:hand)if(rank(card)==12)myHeo=true;
         Random random=new Random(seed(hand,table,seen,counts)^0xBADCA12L);
         for(int trial=0;trial<DEALS;trial++){
             List<List<String>> opponentHands=integrity.exact
@@ -379,13 +414,6 @@ final class MonteCarloAdvisor {
                     int r=rank(card);opp[p][r]++;
                     suits[p][r]=Math.max(suits[p][r],suit(card));
                 }
-            }
-            double anyChopStay=1;
-            if(myHeo){
-                for(int p=0;p<3;p++)if(counts[p]>0&&canChopSingleTwo(opp[p])){
-                    anyChopStay*=1-OpponentBehaviorModel.chopWillingness(counts[p],profiles[p]);
-                }
-                heoChopTotal+=1-anyChopStay;
             }
             for(int i=0;i<options.size();i++){
                 Move m=options.get(i).move;
@@ -462,14 +490,14 @@ final class MonteCarloAdvisor {
             +Math.round(100*individualTotals[winningIndex][0]/DEALS)+"% · Trái "
             +Math.round(100*individualTotals[winningIndex][1]/DEALS)+"% · Phải "
             +Math.round(100*individualTotals[winningIndex][2]/DEALS)+"%";
-        if(myHeo){
-            int danger=(int)Math.round(100*heoChopTotal/DEALS);
-            // Alert when plausible chopping hands exist, especially near endgame;
-            // estimate is about *attempting a heo play*, not every current move.
-            if(danger>=5){
-                detail+="\n⚠ HEO: nguy cơ bị chặt ≈"+danger+"% nếu đánh 2";
-            }
-        }
+        // Warn only about the selected, legal move that *actually plays* a two.
+        // Merely holding a two must never trigger an alert when answering a pair.
+        ArrayList<String> proposed=new ArrayList<>();
+        for(int k=0;k<hand.size();k++)if((selected.move.mask&(1<<k))!=0)
+            proposed.add(hand.get(k));
+        String heoWarning=HeoWarningAdvisor.warningForMove(proposed,table,
+            chopTotals[winningIndex]/DEALS);
+        if(!heoWarning.isEmpty())detail+="\n"+heoWarning;
         return new Advice(title,detail);
     }
     private String singleCardOf(Move m){

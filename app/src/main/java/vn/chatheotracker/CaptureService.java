@@ -84,6 +84,9 @@ public final class CaptureService extends Service {
     private String handPending="";
     private int handPendingFrames=0;
     private boolean manualHandOverride=false;
+    // Once a hand is confirmed, a momentarily obstructed view must not discard
+    // the fact that the stored hand was verified earlier in this round.
+    private boolean handEverVerified=false;
     // Fresh screenshot observations, never stale manual table text.
     private List<String> currentBoard=Collections.emptyList();
     private String boardCandidate="";
@@ -162,7 +165,7 @@ public final class CaptureService extends Service {
             if(candidate.error==null && !candidate.cards.isEmpty()){
                 synchronized(stateLock){
                     handCards.clear();handCards.addAll(candidate.cards);
-                    manualHandOverride=true;
+                    manualHandOverride=true;handEverVerified=true;
                     handPending="";handPendingFrames=0;
                     visualHandTrusted=false;visualFrames=0;
                     persistCurrentHand();
@@ -227,7 +230,7 @@ public final class CaptureService extends Service {
         if("manual".equals(savedSource)){
             StrategyAdvisor.Input previously=StrategyAdvisor.parse(pref.getString("hand",""));
             if(previously.error==null){
-                synchronized(stateLock){handCards.addAll(previously.cards);manualHandOverride=true;}
+                synchronized(stateLock){handCards.addAll(previously.cards);manualHandOverride=true;handEverVerified=true;}
             }
         }else pref.edit().remove("hand").remove("hand_source").apply();
         countRecognizer=new CountRecognizer(this);
@@ -364,11 +367,7 @@ public final class CaptureService extends Service {
                     autoAdviceScanFrames++;
                     // At least three post-turn frames for screen / card history stabilization.
                     // If counters/hand still mismatch, keep scanning for up to ~3 seconds.
-                    PartialDeckState.Result deck=PartialDeckState.check(
-                        handCards,observedCards(),knownCounts);
-                    boolean ready=boardStable && !handCards.isEmpty() &&
-                        deck.feasible && deck.missing<=24 &&
-                        (visualHandTrusted||manualHandOverride||!handPending.isEmpty());
+                    boolean ready=boardStable && !handCards.isEmpty() && handEverVerified;
                     if((ready&&autoAdviceScanFrames>=2)||autoAdviceScanFrames>=22){
                         autoAdvicePending=false;trySuggestion=true;
                     }
@@ -399,14 +398,7 @@ public final class CaptureService extends Service {
                 setScanStatus(state);
             }
             if(changed)mainHandler.post(this::refresh);
-            if(turnBegan){
-                final String warning;
-                synchronized(stateLock){warning=HeoWarningAdvisor.warning(handCards,observedCards());}
-                mainHandler.post(()->{
-                    showPendingAdvice("ĐANG QUÉT BÀI…");
-                    if(!warning.isEmpty())showUrgentHeoWarning(warning);
-                });
-            }
+            if(turnBegan)mainHandler.post(()->showPendingAdvice("ĐANG QUÉT BÀI…"));
             if(turnEnded)mainHandler.post(()->{
                 if(dismissSuggestion!=null)mainHandler.removeCallbacks(dismissSuggestion);
                 if(suggestionPanel!=null)suggestionPanel.setVisibility(View.GONE);
@@ -441,7 +433,7 @@ public final class CaptureService extends Service {
         if(signature.equals(handPending))handPendingFrames++;
         else{handPending=signature;handPendingFrames=1;}
         if(handPendingFrames<3)return false;
-        handCards.addAll(sorted);
+        handCards.addAll(sorted);handEverVerified=true;
         getSharedPreferences("tracker_strategy",MODE_PRIVATE).edit().putString("hand",signature).putString("hand_source","auto").apply();
         return true;
     }
@@ -664,6 +656,7 @@ public final class CaptureService extends Service {
         }
         played.clear();otherPlayed.clear();waitingCards.clear();cardMoves.clear();countDrops.clear();
         handCards.clear();myPlayed.clear();handPending="";handPendingFrames=0;
+        handEverVerified=false;
         fusedHand.clear();
         manualHandOverride=false;
         suggestRequested=false;suggestionScanFrames=0;
@@ -890,14 +883,14 @@ public final class CaptureService extends Service {
         scanBadge.setText("Quét: chờ");
         scanBadge.setGravity(Gravity.CENTER_VERTICAL);
         scanBadge.setTextColor(0xfff5f8ef);
-        scanBadge.setTextSize(11f);
+        scanBadge.setTextSize(10.5f);
         scanBadge.setTypeface(Typeface.DEFAULT,Typeface.BOLD);
         scanBadge.setPadding(dp(4),0,dp(4),0);
         // No rounded panel/border: just one short, legible line.
         scanBadge.setBackgroundColor(0x44212b35);
         scanBadge.setSingleLine(true);
         scanBadge.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        scanBadgeParams=new WindowManager.LayoutParams(dp(136),dp(29),
+        scanBadgeParams=new WindowManager.LayoutParams(dp(182),dp(31),
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE |
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE |
@@ -915,7 +908,7 @@ public final class CaptureService extends Service {
     private void setScanStatus(String value){
         scanDiagnosis=value;
         if(scanBadge!=null){
-            mainHandler.post(()->{if(scanBadge!=null)scanBadge.setText("Quét: "+value);});
+            mainHandler.post(()->{if(scanBadge!=null)scanBadge.setText("Quét: "+ScanStatus.compact(value));});
         }
     }
     /** User request starts a new read of hand, live board and count history.
@@ -963,6 +956,7 @@ public final class CaptureService extends Service {
         // A hand successfully conserved across all 52 known cards is stronger
         // evidence than an older manual choice; reconcile without guessing.
         handCards.clear();handCards.addAll(scanned);
+        handEverVerified=true;
         manualHandOverride=false;
         persistCurrentHand();
         getSharedPreferences("tracker_strategy",MODE_PRIVATE).edit().putString("hand_source","auto").apply();
@@ -988,8 +982,7 @@ public final class CaptureService extends Service {
         final List<String> lead;
         final int[] counts;
         final List<List<List<String>>> histories=new ArrayList<>();
-        final boolean turn,boardOK,consistent,handOK;
-        final int missingHistory;
+        final boolean turn,boardOK,handOK,countsKnown,consistent,overlap;
         final int epoch,request;
         synchronized(stateLock){
             turn=myTurn;
@@ -998,32 +991,39 @@ public final class CaptureService extends Service {
             seen=observedCards();
             lead=new ArrayList<>(currentBoard);
             counts=knownCounts.clone();
-            // Full saved verified play history of the current occupants.
-            // Do not infer an unobserved pass or secretly see hidden hands.
             for(LearnedOpponentHistory h:learning)histories.add(h.snapshot());
             PartialDeckState.Result check=PartialDeckState.check(hand,seen,counts);
             consistent=check.feasible && check.missing<=24;
-            missingHistory=check.missing;
-            // A visually confirmed full fan remains usable even when played
-            // cards were missed; only overlapping/impossible cards invalidate it.
-            handOK=!hand.isEmpty() && (visualHandTrusted || !handPending.isEmpty()
-                || manualHandOverride);
+            boolean allCountersKnown=true;
+            for(int count:counts)if(count<0||count>13){allCountersKnown=false;break;}
+            countsKnown=allCountersKnown;
+            // An old partial screenshot should not invalidate a hand already
+            // verified earlier this round. Never trust unverified/guessed cards.
+            handOK=!hand.isEmpty() && handEverVerified;
+            overlap=!Collections.disjoint(hand,seen) || !Collections.disjoint(hand,lead);
             epoch=turnEpoch;
             request=++adviceRequestId;
         }
         adviceExecutor.execute(()->{
             final MonteCarloAdvisor.Advice result;
-            final String heoWarning=HeoWarningAdvisor.warning(hand,seen);
             if(!turn)result=new MonteCarloAdvisor.Advice("CHƯA ĐẾN LƯỢT","");
             else if(!boardOK)result=new MonteCarloAdvisor.Advice("QUÉT LẠI BÀI GIỮA BÀN","");
-            else if(!handOK||!consistent)result=new MonteCarloAdvisor.Advice(
-                "QUÉT LẠI BÀI VÀ LỊCH SỬ","");
+            else if(!handOK||overlap)result=new MonteCarloAdvisor.Advice("QUÉT LẠI BÀI TAY","");
             else {
                 MonteCarloAdvisor.Advice computed;
                 try {
                     StrategyMode mode=StrategyMode.fromKey(getSharedPreferences("tracker_strategy",MODE_PRIVATE)
                         .getString("mode",StrategyMode.PLACEMENT.key));
-                    computed=MonteCarloAdvisor.adviseBehaviorAware(hand,lead,seen,counts,histories,mode);
+                    if(consistent){
+                        computed=MonteCarloAdvisor.adviseBehaviorAware(hand,lead,seen,counts,histories,mode);
+                    }else if(!countsKnown || PartialDeckState.check(hand,seen,counts).feasible){
+                        // A missing counter or incomplete history does not erase
+                        // the known legal plays. Show a conservative suggestion,
+                        // but DO NOT manufacture a blocking percentage.
+                        computed=MonteCarloAdvisor.adviseWithIncompleteHistory(hand,lead,seen,mode);
+                    }else{
+                        computed=new MonteCarloAdvisor.Advice("QUÉT LẠI BÀI VÀ LỊCH SỬ","");
+                    }
                 }catch(Exception err){
                     android.util.Log.w("Tracker","Advice unavailable",err);
                     computed=new MonteCarloAdvisor.Advice("QUÉT LẠI BÀI VÀ LỊCH SỬ","");
@@ -1034,7 +1034,7 @@ public final class CaptureService extends Service {
                 synchronized(stateLock){
                     if(stopping || !myTurn || turnEpoch!=epoch || adviceRequestId!=request)return;
                 }
-                showAdvice(result,heoWarning);
+                showAdvice(result,"");
             });
         });
     }

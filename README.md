@@ -1,3 +1,7 @@
+# Chặt Heo Tracker v2.0 — Context Warning / Stable Advice
+
+**Cập nhật v2.0:** [CHANGELOG_V2_0.md](CHANGELOG_V2_0.md)
+
 # Chặt Heo Tracker v1.8 – Scan Diagnostics / Compact HUD
 
 Bản mã nguồn Android thử nghiệm, chạy tính toán trên điện thoại, không có API Internet. Cập nhật từ **v1.7**.

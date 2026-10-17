@@ -2,28 +2,21 @@ package vn.chatheotracker;
 
 import java.util.*;
 
-/** Independent of advice/deck accounting. Never infer opponents' hidden cards as fact. */
+/** Only show a chopping warning for an actually recommended play containing a 2.
+ * Simulated rates are heuristic and depend on the unverified house rules. */
 final class HeoWarningAdvisor {
-    static String warning(Collection<String> myHand,Collection<String> observed){
-        if(myHand==null||myHand.isEmpty()||observed==null)return "";
-        boolean myTwo=false;
-        for(String card:myHand)if(card.startsWith("2"))myTwo=true;
-        if(!myTwo)return "";
-        HashSet<String> unseen=new HashSet<>();
-        for(String r:MonteCarloAdvisor.RANKS)for(String s:MonteCarloAdvisor.SUITS){
-            String c=r+s;
-            if(!myHand.contains(c)&&!observed.contains(c))unseen.add(c);
-        }
-        int[] remainingByRank=new int[13];
-        for(String card:unseen)remainingByRank[MonteCarloAdvisor.rank(card)]++;
-        boolean possibleFour=false,possiblePairs=false;
-        for(int n:remainingByRank)if(n==4)possibleFour=true;
-        for(int start=0;start<10;start++){
-            if(remainingByRank[start]>=2&&remainingByRank[start+1]>=2&&remainingByRank[start+2]>=2){
-                possiblePairs=true;break;
-            }
-        }
-        return (possibleFour||possiblePairs)?"⚠ HEO: chưa loại trừ khả năng bị chặt":"";
+    static String warningForMove(Collection<String> proposed, Collection<String> lead, double chopRisk) {
+        if(proposed==null || proposed.isEmpty() || Double.isNaN(chopRisk) ||
+           Double.isInfinite(chopRisk) || chopRisk<=0) return "";
+        boolean playingTwo=false;
+        for(String card:proposed)if(MonteCarloAdvisor.rank(card)==12)playingTwo=true;
+        if(!playingTwo)return "";
+        // A lone heo does not answer a pair. Reject mismatched families even
+        // when an upstream caller accidentally attempts to show a warning.
+        if(lead!=null && !lead.isEmpty() && lead.size()!=proposed.size())return "";
+        int pct=(int)Math.round(100*Math.max(0,Math.min(1,chopRisk)));
+        if(pct==0)return "";
+        return "⚠ HEO: ≈"+pct+"% mẫu có thể chặt";
     }
     private HeoWarningAdvisor(){}
 }

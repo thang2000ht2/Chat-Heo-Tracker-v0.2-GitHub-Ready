@@ -1,3 +1,5 @@
+**v2.0:** Bản sửa điều kiện cảnh báo heo theo *nước thực tế được đề xuất*, thu gọn nhãn Quét, và gợi ý chiến thuật tạm nếu lịch sử thiếu. Xem CHANGELOG_V2_0.md.
+
 # GitHub Actions — v1.7
 
 1. Giải nén ZIP vào máy, chọn mọi file và thư mục **bên trong**, bao gồm thư mục ẩn `.github`.
