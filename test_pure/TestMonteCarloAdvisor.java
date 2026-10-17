@@ -20,7 +20,7 @@ public final class TestMonteCarloAdvisor {
         MonteCarloAdvisor.Advice mc=MonteCarloAdvisor.advise(sample,Collections.emptyList(),Collections.emptyList(),new int[]{13,13,13});
         double secs=(System.nanoTime()-before)/1e9;
         ok(mc.detail.contains("192 mẫu"),"sampling works with exact 52-card partition");
-        ok(mc.detail.contains("có bài để chặn"),"risk present");
+        ok(mc.detail.contains("có bài chặn"),"risk present");
         ok(mc.detail.contains("Không phải xác suất thắng"),"honest uncertainty label");
         ok(mc.detail.contains("Ai có bài để chặn gợi ý"),"opponent-specific threat analysis");
         ok(secs<15,"sampling unexpectedly slow: "+secs);

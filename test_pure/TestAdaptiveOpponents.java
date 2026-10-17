@@ -46,8 +46,8 @@ public final class TestAdaptiveOpponents {
         MonteCarloAdvisor.Advice suggestion=MonteCarloAdvisor.adviseBehaviorAware(
             deck.subList(0,13),Collections.emptyList(),Collections.emptyList(),new int[]{13,13,13},learned,StrategyMode.PLACEMENT);
         ok(suggestion.title.startsWith("ĐÁNH "),"strategy produces a valid suggestion");
-        ok(suggestion.detail.contains("Trên") && suggestion.detail.contains("Trái") && suggestion.detail.contains("Phải"),
-            "seat-specific block risks are exposed");
-        System.out.println("TestAdaptiveOpponents OK (session changes, local learning, per-seat advice)");
+        ok(suggestion.detail.contains("mô phỏng") || suggestion.detail.contains("chưa hiệu chuẩn"),
+            "uncalibrated risk is explicit and not a fake per-seat percentage");
+        System.out.println("TestAdaptiveOpponents OK (session changes, local learning, cautious advice)");
     }
 }

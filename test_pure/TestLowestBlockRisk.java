@@ -9,7 +9,7 @@ public final class TestLowestBlockRisk {
         MonteCarloAdvisor.Advice open=MonteCarloAdvisor.adviseLowestBlockRisk(
             mine,Collections.emptyList(),Collections.emptyList(),initial);
         check(open.title.startsWith("ĐÁNH "),"must suggest a concrete play: "+open.title);
-        check(open.detail.contains("% mẫu đối thủ có thể chặn"),"must label sampled response risk");
+        check(open.detail.contains("chưa hiệu chuẩn"),"must label sampled response risk");
         check(!open.detail.contains("Chế độ:")&&!open.detail.contains("lượt tối thiểu"),"no lengthy tactical prose");
         MonteCarloAdvisor.Advice mismatch=MonteCarloAdvisor.adviseLowestBlockRisk(
             mine,Collections.emptyList(),Collections.emptyList(),new int[]{12,13,13});
@@ -38,7 +38,7 @@ public final class TestLowestBlockRisk {
             MonteCarloAdvisor.Advice a=MonteCarloAdvisor.adviseLowestBlockRisk(
                 h,Collections.emptyList(),Collections.emptyList(),new int[]{13,13,13});
             check(a.title.startsWith("ĐÁNH "),"random deal must produce a move ("+i+") " +a.title);
-            check(a.detail.matches("[0-9]{1,3}% mẫu đối thủ có thể chặn(?:/chặt)?"),"concise only ("+i+")");
+            check(a.detail.contains("chưa hiệu chuẩn") && !a.detail.contains("%"),"concise only ("+i+")");
         }
         System.out.println("TestLowestBlockRisk OK");
     }

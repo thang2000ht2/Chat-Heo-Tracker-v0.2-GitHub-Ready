@@ -50,7 +50,7 @@ public final class TestContextualHandSampler {
             Collections.emptyList(),counts,null,StrategyMode.PLACEMENT);
         check(a.title.equals(b.title)&&a.detail.equals(b.detail),"Offline advice reproducible");
         check(a.title.startsWith("ĐÁNH "),"Gives one concrete recommendation");
-        check(a.detail.contains("offline"),"Clearly marks model estimate");
+        check(a.detail.contains("chưa hiệu chuẩn") || a.detail.contains("mô phỏng"),"Clearly marks model estimate");
         System.out.println("TestContextualHandSampler OK (1000 legal hidden deals; deterministic suggestion)");
     }
 }

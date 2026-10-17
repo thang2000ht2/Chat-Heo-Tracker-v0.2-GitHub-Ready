@@ -34,7 +34,7 @@ public final class TestOpponentBehavior {
         MonteCarloAdvisor.Advice advice=MonteCarloAdvisor.adviseBehaviorAware(mine,
             Collections.emptyList(),Collections.emptyList(),new int[]{13,13,13},emptyHistory(),StrategyMode.PLACEMENT);
         ok(advice.title.startsWith("ĐÁNH "),"full consistent deal gets a concrete play "+advice.title);
-        ok(advice.detail.contains("mức chặn ước tính"),"risk must be labelled heuristic");
+        ok(advice.detail.contains("chưa hiệu chuẩn"),"risk must be labelled heuristic");
         MonteCarloAdvisor.Advice invalid=MonteCarloAdvisor.adviseBehaviorAware(mine,
             Collections.emptyList(),Collections.emptyList(),new int[]{12,13,13},emptyHistory(),StrategyMode.PLACEMENT);
         ok(invalid.title.startsWith("ĐÁNH") && invalid.detail.contains("thiếu 1 lá lịch sử"),

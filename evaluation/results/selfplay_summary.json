@@ -1,0 +1,64 @@
+{
+  "schema": "selfplay-reference-rules-v1",
+  "seed": 314159,
+  "games_per_policy": 2000,
+  "note": "Reference-rule self-play only; groups are per random deal, resampling all four seat rotations together. NOT Pig Hunters or human-play performance.",
+  "results": {
+    "lowest": {
+      "mean_rank": 2.5,
+      "first_rate": 0.25,
+      "deal_groups": 2000,
+      "seat_trials": 8000,
+      "first_cluster_bootstrap95": [
+        0.25,
+        0.25
+      ],
+      "mean_rank_cluster_bootstrap95": [
+        2.5,
+        2.5
+      ]
+    },
+    "max_shed": {
+      "mean_rank": 2.016,
+      "first_rate": 0.426,
+      "deal_groups": 2000,
+      "seat_trials": 8000,
+      "first_cluster_bootstrap95": [
+        0.4171,
+        0.4349
+      ],
+      "mean_rank_cluster_bootstrap95": [
+        1.9997,
+        2.0353
+      ]
+    },
+    "save_twos": {
+      "mean_rank": 2.0105,
+      "first_rate": 0.429,
+      "deal_groups": 2000,
+      "seat_trials": 8000,
+      "first_cluster_bootstrap95": [
+        0.4208,
+        0.4379
+      ],
+      "mean_rank_cluster_bootstrap95": [
+        1.9932,
+        2.0299
+      ]
+    },
+    "tempo": {
+      "mean_rank": 2.0121,
+      "first_rate": 0.4384,
+      "deal_groups": 2000,
+      "seat_trials": 8000,
+      "first_cluster_bootstrap95": [
+        0.4305,
+        0.4471
+      ],
+      "mean_rank_cluster_bootstrap95": [
+        1.9941,
+        2.0293
+      ]
+    }
+  }
+}

@@ -8,7 +8,7 @@ public final class TestHeoContextAndFallback {
             "No heo warning for a pair lead and a single 2");
         ok(HeoWarningAdvisor.warningForMove(cards("10S"),Collections.emptyList(),.66).isEmpty(),
             "Holding a heo is irrelevant if suggesting ten");
-        ok(HeoWarningAdvisor.warningForMove(cards("2H"),Collections.emptyList(),.14).contains("14%"),
+        ok(HeoWarningAdvisor.warningForMove(cards("2H"),Collections.emptyList(),.14).contains("chưa định lượng"),
             "Risk shown for a proposed lone heo");
         ok(HeoWarningAdvisor.warningForMove(cards("2H"),Collections.emptyList(),0).isEmpty(),
             "No phantom zero risk warning");

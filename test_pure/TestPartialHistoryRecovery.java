@@ -44,7 +44,7 @@ public final class TestPartialHistoryRecovery {
             "Do not warn without playing a heo");
         check(HeoWarningAdvisor.warningForMove(Arrays.asList("2H"),Arrays.asList("JS","JC"),0.8).isEmpty(),
             "Single heo cannot answer an opponent pair");
-        check(HeoWarningAdvisor.warningForMove(Arrays.asList("2H"),Arrays.asList("AS"),0.25).contains("25%"),
+        check(HeoWarningAdvisor.warningForMove(Arrays.asList("2H"),Arrays.asList("AS"),0.25).contains("chưa định lượng"),
             "Give estimated chop risk only for proposed heo play");
         System.out.println("TestPartialHistoryRecovery OK");
     }
