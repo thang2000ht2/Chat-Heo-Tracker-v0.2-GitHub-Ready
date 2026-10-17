@@ -1,0 +1,17 @@
+Chặt Heo Tracker v2.5 – kiểm thử tại môi trường làm mã nguồn
+Ngày: 2026-10-17
+
+Đã kiểm tra:
+- Biên dịch các thành phần Java độc lập với Android với javac --release 17.
+- 24 chương trình kiểm thử Java: lịch sử, nhận diện nhiều khung, mô phỏng, bộ đếm, phân phối 52 lá, chi tiết lượt bỏ đã xác nhận, cuối ván, lưu dữ liệu học.
+- Các bài kiểm tra Python: luật tham chiếu, JSONL, lượt bỏ, hiệu chuẩn, bridge benchmark; smoke self-play 40 ván.
+- Công cụ huấn luyện xu hướng nước đánh nhận diện thêm 3 đôi thông / 4 đôi thông đã đánh thật.
+- Kiểm tra workflow GitHub và mã nguồn trong ZIP.
+
+Chưa kiểm tra/không được tuyên bố:
+- Không biên dịch APK Android tại đây: môi trường thiếu Android SDK.
+- Chưa thử thực tế trên Xiaomi 17 Pro Max và HyperOS.
+- Không có bộ luật Pig Hunters đầy đủ đã được nhà phát hành xác nhận.
+- Chưa có bộ nhãn ván thật để hiệu chuẩn xác suất đang giữ hàng/chặt heo.
+- Lượt bỏ mới chỉ được dùng khi người chơi xác nhận; không tự nhận từ ảnh.
+- Các tỉ lệ trong HUD = tần suất mẫu có trọng số chưa hiệu chuẩn, không phải xác suất chặt thực tế.

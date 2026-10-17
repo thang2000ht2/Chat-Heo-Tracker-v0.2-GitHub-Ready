@@ -15,7 +15,7 @@ import pathlib
 import statistics
 from typing import Any
 
-KINDS = ("single", "pair", "triple", "four", "straight", "other")
+KINDS = ("single", "pair", "triple", "four", "three_pairs", "four_pairs", "straight", "other")
 MIN_ROUNDS = 30
 MIN_MOVES = 150
 ALPHA = 2.0
@@ -36,6 +36,12 @@ def kind(cards):
         return "single"
     if len(cards) in (2,3,4) and len(set(values)) == 1:
         return {2:"pair",3:"triple",4:"four"}[len(cards)]
+    # Verified 3/4 consecutive pairs (rank 2 does not belong to a sequence).
+    if len(cards) in (6,8) and max(values)<15:
+        counts=collections.Counter(values)
+        if len(counts)==len(cards)//2 and all(v==2 for v in counts.values()) and \
+                max(counts)-min(counts)+1==len(counts):
+            return "three_pairs" if len(cards)==6 else "four_pairs"
     if len(cards) >= 3 and max(values) < 15 and len(set(values)) == len(cards) and max(values)-min(values)+1 == len(cards):
         return "straight"
     return "other"
@@ -133,6 +139,7 @@ def main():
     output = {
         "schema":1,"model":"observed_move_family_stage_smoothed",
         "not_a_policy_model":True,"not_calibrated_block_or_win_probability":True,
+        "observed_special_combos_only":True,
         "may_be_used_in_live_advice":False,
         "round_split":"deterministic 80/20 by SHA256(round_id)",
         "train_moves":len(training),"holdout_moves":len(test),

@@ -8,6 +8,9 @@ def main():
     assert kind(["JS","JC"])=="pair"
     assert kind(["3S","4C","5D"])=="straight"
     assert kind(["2S","3D","4C"])=="other"
+    assert kind(["3S","3C","4D","4H","5S","5D"])=="three_pairs"
+    assert kind(["3S","3C","4D","4H","5S","5D","6S","6C"])=="four_pairs"
+    assert kind(["2S","2C","3S","3C","4S","4C"])=="other"
     with tempfile.TemporaryDirectory() as d:
         path=pathlib.Path(d)/"log.jsonl"
         rows=[]

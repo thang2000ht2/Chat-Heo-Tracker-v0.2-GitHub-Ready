@@ -11,10 +11,13 @@ public final class TestThreatScenarioSampler {
         ThreatScenarioSampler.Seat[] result=ThreatScenarioSampler.sample(hand,played,counters,profiles,42);
         require(result.length==3);
         for(ThreatScenarioSampler.Seat p:result){
-            require(p.samples==512);
-            for(int i=0;i<3;i++)require(p.hits[i]>=0 && p.hits[i]<=512);
+            require(p.samples==ThreatScenarioSampler.SAMPLES);
+            for(int i=0;i<3;i++)require(p.hits[i]>=0 && p.hits[i]<=p.samples);
         }
-        try {ThreatScenarioSampler.sample(hand,played,new int[]{5,5,5},profiles,42);throw new AssertionError("Need guard");}
+        ThreatScenarioSampler.Seat[] weak=ThreatScenarioSampler.sample(hand,played,new int[]{5,5,5},profiles,42);
+        require(weak.length==3 && weak[0].lowConfidence);
+        require(weak[0].samples==ThreatScenarioSampler.LATE_SAMPLES);
+        try {ThreatScenarioSampler.sample(hand,played,new int[]{-1,13,13},profiles,42);throw new AssertionError("Need guard on unknown counters");}
         catch(IllegalArgumentException expected){}
         System.out.println("ThreatScenarioSampler OK");
     }
