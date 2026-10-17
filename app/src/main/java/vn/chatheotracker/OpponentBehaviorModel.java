@@ -50,8 +50,11 @@ final class OpponentBehaviorModel {
         double breakPairWillingness(){
             // Two singles of same rank on different turns prove a pair was split.
             // Playing actual pairs adds only a weak preference to preserve other pairs.
-            double p=0.28 + 0.19*Math.min(2,brokenPairs) - 0.025*Math.min(4,pairs);
-            return clamp(p,0.15,0.83);
+            // Shrink small observational histories toward a neutral prior.
+            // Two observed broken pairs are weak evidence, not a reliable style.
+            double weight=Math.max(0.,(moves-1.0)/(moves+12.0));
+            double observed=0.19*Math.min(2,brokenPairs) - 0.025*Math.min(4,pairs);
+            return clamp(0.28 + weight*observed,0.15,0.83);
         }
     }
     static Profile[] fromHistory(List<List<List<String>>> histories){

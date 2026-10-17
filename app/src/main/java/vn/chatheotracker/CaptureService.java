@@ -130,12 +130,34 @@ public final class CaptureService extends Service {
     private final int[] knownCounts={-1,-1,-1},lastCandidates={-1,-1,-1},candidateFrames={0,0,0};
     private final int[] missingCards={0,0,0};
     private boolean sawAnyLowerCounter=false;
-    private int newDealStableFrames=0;
+    private final RedealDetector redealDetector=new RedealDetector();
     private long ignoreCardsUntil=0L;
     private boolean stopping=false;
     private int densityDpi;
+    private TrainingDataStore trainingData;
+    private String roundId;
+    private String lastPartialLogged="";
+    private long lastPartialLoggedAt=0;
 
-    @Override public void onCreate(){super.onCreate();mainHandler=new Handler(Looper.getMainLooper());}
+    /** Training is observational: never infer hidden cards or label a proposed move as a play. */
+    private void trainEvent(String name,Object... attributes){
+        if(trainingData==null || roundId==null)return;
+        if(!getSharedPreferences("tracker_training",MODE_PRIVATE).getBoolean("collect",true))return;
+        trainingData.append(name,roundId,TrainingDataStore.fields(attributes));
+    }
+    private void startNewRound(String reason){
+        roundId=UUID.randomUUID().toString();
+        getSharedPreferences("tracker_training",MODE_PRIVATE).edit()
+            .putString("active_round_id",roundId).apply();
+        trainEvent("round_begin","reason",reason);
+    }
+    @Override public void onCreate(){
+        super.onCreate();mainHandler=new Handler(Looper.getMainLooper());
+        trainingData=new TrainingDataStore(getFilesDir());
+        // Each new screen-capture session must have its own round ID; resuming
+        // the app must not silently blend observations from separate games.
+        roundId=null;
+    }
     @Override public int onStartCommand(Intent intent,int flags,int startId){
         if(intent==null)return START_NOT_STICKY;
         String action=intent.getAction();
@@ -223,6 +245,7 @@ public final class CaptureService extends Service {
         else startForeground(77,n);
     }
     private void startScreenCapture(int code,Intent data){
+        startNewRound("capture_session_started");
         recognizer=new CardRecognizer(this);
         // Restore explicitly edited hand only. Previous automatic scans may be stale.
         android.content.SharedPreferences pref=getSharedPreferences("tracker_strategy",MODE_PRIVATE);
@@ -345,6 +368,14 @@ public final class CaptureService extends Service {
                 boolean occupantChanged=readSeats && handleSeatIdentities(seatNames,counts);
                 changed=handleFrame(cards,counts,now) || occupantChanged;
                 if(myCards!=null){
+                    if(!myCards.complete && !myCards.cards.isEmpty()){
+                        String sig=myCards.cards.size()+":"+myCards.diagnosis;
+                        if(!sig.equals(lastPartialLogged)||now-lastPartialLoggedAt>10000){
+                            trainEvent("hand_partial","visible_count",myCards.cards.size(),
+                                "diagnosis",myCards.diagnosis,"confidence","incomplete_not_ground_truth");
+                            lastPartialLogged=sig;lastPartialLoggedAt=now;
+                        }
+                    }
                     if(handleHandFrame(myCards))changed=true;
                     if(updateVisibleHand(myCards))changed=true;
                 }
@@ -402,7 +433,6 @@ public final class CaptureService extends Service {
             if(turnEnded)mainHandler.post(()->{
                 if(dismissSuggestion!=null)mainHandler.removeCallbacks(dismissSuggestion);
                 if(suggestionPanel!=null)suggestionPanel.setVisibility(View.GONE);
-                if(panels[3]!=null)panels[3].setVisibility(View.VISIBLE);
             });
             if(trySuggestion)runFreshAdvice();
         }catch(Exception e){
@@ -434,6 +464,8 @@ public final class CaptureService extends Service {
         else{handPending=signature;handPendingFrames=1;}
         if(handPendingFrames<3)return false;
         handCards.addAll(sorted);handEverVerified=true;
+        trainEvent("hand_verified","cards",sorted,"method","stable_three_frames",
+            "confidence","verified_13","count",sorted.size());
         getSharedPreferences("tracker_strategy",MODE_PRIVATE).edit().putString("hand",signature).putString("hand_source","auto").apply();
         return true;
     }
@@ -447,7 +479,11 @@ public final class CaptureService extends Service {
                 changed=true;
             }
         }
-        if(changed)persistCurrentHand();
+        if(changed){
+            trainEvent("hand_cards_removed","cards",new ArrayList<>(cards),
+                "confidence","observed_board_overlap");
+            persistCurrentHand();
+        }
     }
     private void persistCurrentHand(){
         // Keep an empty value at the end of a hand. Never regenerate cards after they are spent.
@@ -468,35 +504,32 @@ public final class CaptureService extends Service {
             if(candidateFrames[i]<2 || knownCounts[i]==count)continue;
             int before=knownCounts[i];
             knownCounts[i]=count;
+            if(before!=count){
+                trainEvent("opponent_count","seat",i,"before",before,"after",count,
+                    "confidence","stable_two_frames");
+            }
             if(before>count){
                 countDrops.add(new CountDrop(i,before-count,now));
                 sawAnyLowerCounter=true;
                 changed=true;
             }else if(before>=0 && count==13){changed=true;}
         }
-        // A redeal is recognized only after actual progress in the previous hand.
-        // Require all three freshly READ counters to be 13 for five successive
-        // sampled frames (~1.5s) to reject transition animations / OCR glitches.
-        boolean completeDeal=sawAnyLowerCounter && allThirteen();
-        if(completeDeal){
+        // The old logic depended on historical *recognized* counts and could miss
+        // the next deal if a 0 counter vanished or a player's identity changed.
+        // Independently require seven fresh frames at 13/13/13, armed only after
+        // confirmed progress in the previous deal. Never reset an idle full table.
+        boolean playedBefore= sawAnyLowerCounter || !played.isEmpty() ||
+            !myPlayed.isEmpty() || !waitingCards.isEmpty() ||
+            !cardMoves.isEmpty() || !countDrops.isEmpty();
+        if(redealDetector.observe(counts,playedBefore)){
+            resetRoundInternal("confirmed_redeal");
             for(int i=0;i<3;i++){
-                if(counts[i]!=13 || lastCandidates[i]!=13 || candidateFrames[i]<2){
-                    completeDeal=false;break;
-                }
+                knownCounts[i]=13;lastCandidates[i]=13;candidateFrames[i]=2;
             }
+            ignoreCardsUntil=now+1200;
+            setScanStatus("ván mới · đang quét");
+            return true;
         }
-        if(completeDeal){
-            newDealStableFrames++;
-            if(newDealStableFrames>=5){
-                resetRoundInternal();
-                for(int i=0;i<3;i++){
-                    knownCounts[i]=13;lastCandidates[i]=13;candidateFrames[i]=2;
-                }
-                // Ignore residual table cards while the new deal animates.
-                ignoreCardsUntil=now+1400;
-                return true;
-            }
-        }else newDealStableFrames=0;
         if(now<ignoreCardsUntil){
             recentCards.clear();
             return changed;
@@ -544,6 +577,10 @@ public final class CaptureService extends Service {
                 }
                 playerHistory[drop.player].record(accepted);
                 if(!accepted.isEmpty()){
+                    trainEvent("opponent_move","seat",drop.player,"cards",accepted,
+                        "count_decrease",drop.delta,"remaining_after",knownCounts[drop.player],
+                        "confidence",drop.delta==accepted.size()
+                        ?"matched_exact":"partial_card_observation");
                     learning[drop.player].record(accepted);
                     persistOpponentLearning(drop.player);
                 }
@@ -560,6 +597,8 @@ public final class CaptureService extends Service {
                     accepted.add(card);
                 }
                 otherHistory.record(accepted);
+                if(!accepted.isEmpty())trainEvent("unattributed_play","cards",accepted,
+                    "confidence","no_counter_match");
                 updateHandAfterPlay(accepted);
                 waitingCards.removeAll(move.cards);
                 cardMoves.remove(m);changed=true;
@@ -568,6 +607,8 @@ public final class CaptureService extends Service {
         for(int i=0;i<countDrops.size();){
             CountDrop drop=countDrops.get(i);
             if(now-drop.time>4000){
+                trainEvent("missing_play","seat",drop.player,"count_decrease",drop.delta,
+                    "confidence","unreadable_cards");
                 missingCards[drop.player]+=drop.delta;
                 countDrops.remove(i);changed=true;
             }else i++;
@@ -624,6 +665,8 @@ public final class CaptureService extends Service {
             String oldIdentity=seatIdentity[i].active();
             SeatIdentityTracker.Event ev=seatIdentity[i].observe(signatures[i],roomVisible);
             if(ev==SeatIdentityTracker.Event.NONE)continue;
+            trainEvent("seat_transition","seat",i,"transition",ev.name().toLowerCase(Locale.ROOT),
+                "confidence","visual_only_unverified_identity");
             if(ev==SeatIdentityTracker.Event.REPLACED || ev==SeatIdentityTracker.Event.VACATED){
                 trainingArchive.remember(oldIdentity,learning[i]);
                 // Reset only the CURRENT seat session. Older opponents remain in archive.
@@ -649,7 +692,14 @@ public final class CaptureService extends Service {
         return changed;
     }
 
-    private void resetRoundInternal(){
+    private void resetRoundInternal(String reason){
+        if(roundId!=null){
+            trainEvent("round_end","result","unknown","reason",reason);
+            getSharedPreferences("tracker_training",MODE_PRIVATE).edit()
+                .putString("last_round_id",roundId).apply();
+        }
+        startNewRound(reason);
+        lastPartialLogged="";lastPartialLoggedAt=0;
         for(int i=0;i<3;i++){
             learning[i].newRound();
             persistOpponentLearning(i);
@@ -671,17 +721,16 @@ public final class CaptureService extends Service {
         Arrays.fill(knownCounts,-1);Arrays.fill(lastCandidates,-1);
         Arrays.fill(candidateFrames,0);Arrays.fill(missingCards,0);
         recentCards.clear();sawAnyLowerCounter=false;
-        newDealStableFrames=0;
+        redealDetector.clear();
         getSharedPreferences("tracker_strategy",MODE_PRIVATE).edit().remove("hand").remove("table").remove("hand_source").apply();
         mainHandler.post(()->{
             if(suggestionPanel!=null)suggestionPanel.setVisibility(View.GONE);
-            if(panels[3]!=null)panels[3].setVisibility(View.VISIBLE);
         });
     }
     private void manualReset(){
         setScanStatus("reset · quét mới");
         synchronized(stateLock){
-            resetRoundInternal();
+            resetRoundInternal("manual_reset");
             ignoreCardsUntil=SystemClock.elapsedRealtime()+250;
             lastScanned=0;
         }
@@ -958,6 +1007,9 @@ public final class CaptureService extends Service {
         handCards.clear();handCards.addAll(scanned);
         handEverVerified=true;
         manualHandOverride=false;
+        trainEvent("hand_verified","cards",new ArrayList<>(scanned),
+            "method","visible_hand_after_play","confidence","multi_frame_verified",
+            "count",scanned.size());
         persistCurrentHand();
         getSharedPreferences("tracker_strategy",MODE_PRIVATE).edit().putString("hand_source","auto").apply();
         return true;
@@ -1034,6 +1086,11 @@ public final class CaptureService extends Service {
                 synchronized(stateLock){
                     if(stopping || !myTurn || turnEpoch!=epoch || adviceRequestId!=request)return;
                 }
+                trainEvent("advice_proposed","title",result.title,
+                    "detail",result.detail,"hand_count",hand.size(),
+                    "seen_count",seen.size(),"lead",lead,"opponent_counts",counts,
+                    "source","heuristic_monte_carlo_not_calibrated",
+                    "result_is_actual_play",false);
                 showAdvice(result,"");
             });
         });
@@ -1075,11 +1132,11 @@ public final class CaptureService extends Service {
             advice.title.startsWith("BỎ")?0xffffdf94:0xffffffff);
         suggestionText.setText(highlight);
         if(dismissSuggestion!=null)mainHandler.removeCallbacks(dismissSuggestion);
-        if(panels[3]!=null)panels[3].setVisibility(View.GONE);
+        // A suggestion must NEVER hide the user's cards or the remaining deck.
+        // The popup is anchored at top-left, away from the lower HUD.
         suggestionPanel.setVisibility(View.VISIBLE);
         dismissSuggestion=()->{
             if(suggestionPanel!=null)suggestionPanel.setVisibility(View.GONE);
-            if(panels[3]!=null)panels[3].setVisibility(View.VISIBLE);
         };
         mainHandler.postDelayed(dismissSuggestion,5000);
     }
@@ -1310,6 +1367,7 @@ public final class CaptureService extends Service {
         return remain;
     }
     @Override public void onDestroy(){
+        trainEvent("capture_stopped","result","unknown");
         stopping=true;
         mainHandler.removeCallbacks(captureWatchdog);
         adviceExecutor.shutdownNow();

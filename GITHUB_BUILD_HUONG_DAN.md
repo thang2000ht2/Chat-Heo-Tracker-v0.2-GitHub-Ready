@@ -1,21 +1,15 @@
-**v2.0:** Bản sửa điều kiện cảnh báo heo theo *nước thực tế được đề xuất*, thu gọn nhãn Quét, và gợi ý chiến thuật tạm nếu lịch sử thiếu. Xem CHANGELOG_V2_0.md.
+# Hướng dẫn GitHub Actions — v2.1
 
-# GitHub Actions — v1.7
+1. Giải nén dự án, tải các thư mục và tệp bên trong lên repository GitHub, bao gồm `.github/workflows/build-apk.yml`.
+2. Mở **Actions** → **Build Chặt Heo Tracker APK** → **Run workflow**.
+3. Workflow phải chạy qua 18 bộ kiểm thử Java trước khi chạy `:app:assembleDebug`.
+4. Khi thành công, tải artifact `ChatHeoTracker-v2.1-tempo-redeal-apk`, giải nén và lấy file `app-debug.apk`.
+5. Nếu Actions thất bại, chia sẻ lỗi đầu tiên ở bước tương ứng, không chỉ dòng cuối `exit code 1`.
 
-1. Giải nén ZIP vào máy, chọn mọi file và thư mục **bên trong**, bao gồm thư mục ẩn `.github`.
-2. Tải lên repository GitHub (tốt nhất để Private).
-3. Chọn **Actions → Build Chặt Heo Tracker APK → Run workflow**.
-4. Chờ kiểm thử pure-Java và `Build debug APK` thành công; tải Artifact `ChatHeoTracker-v1.7-stable-hud-offline-apk`.
-5. Giải nén artifact và cài `app-debug.apk` lên điện thoại.
+> Cảnh báo: một APK debug biên dịch trên máy GitHub Actions mới có thể dùng chữ ký khác bản bạn đã cài. **Không gỡ app cũ** nếu muốn giữ hồ sơ tự học và chưa có bản sao lưu. Để nâng cấp ổn định cần cấu hình cùng keystore lâu dài; workflow này chưa triển khai ký bằng khóa cố định.
 
-Lưu ý: ứng dụng chưa được biên dịch bằng Android SDK và thử trực tiếp trong môi trường tạo gói này. Nếu Actions báo đỏ, hãy gửi ảnh và đoạn lỗi gần dòng đầu tiên trong mục `Build debug APK`. Tránh đăng log có thông tin nhạy cảm.
+Kiểm thử Java thành công không chứng minh tính chính xác ảnh trên Android 16. Chỉ đánh giá lỗi quét/đếm/reset sau khi cài và thử trên điện thoại thực.
 
+## Cập nhật v2.2
 
-## Bản 1.8
-- Gói phát hành: `ChatHeoTracker-v1.8-scan-fix-compact-ai-apk`
-- Đã thêm TestHandFanGeometry / TestResidualHandQuality, xuất APK sau khi test thuần Java qua.
-- Đây vẫn là dự án nguồn chưa thử build Android trực tiếp trên Xiaomi.
-
-
-### v1.9 build notes
-The workflow runs `TestPartialHistoryRecovery` plus the prior pure-Java tests. If build fails after the test stage, copy the first Java/Gradle error and share it. The debug artifact is `ChatHeoTracker-v1.9-recovery-ai-warning-apk`.
+GitHub Actions tự kiểm tra class `TrainingDataStore`, `TestTrainingDataStore`, `training_tools/test_train_move_patterns.py` và biên dịch `app-debug.apk`. Artifact: `ChatHeoTracker-v2.2-training-dataset-apk`.

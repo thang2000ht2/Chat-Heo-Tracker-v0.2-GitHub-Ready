@@ -23,6 +23,7 @@ import android.text.InputType;
 
 public final class MainActivity extends Activity {
     private static final int REQUEST_CAPTURE = 101;
+    private static final int REQUEST_EXPORT = 102;
     private TextView state;
     @Override public void onCreate(Bundle saved) {
         super.onCreate(saved);
@@ -30,7 +31,7 @@ public final class MainActivity extends Activity {
         root.setPadding(36, 64, 36, 20); root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(Color.rgb(20,22,29));
         TextView title = text("CHẶT HEO TRACKER",24,Color.WHITE); root.addView(title);
-        root.addView(text("v1.7 • AI offline • Gợi ý về sớm • Android 16",15,0xffd0d0d0));
+        root.addView(text("v2.2 • AI offline • Ghi dữ liệu thật để huấn luyện",15,0xffd0d0d0));
         state=text("Chưa theo dõi",16,0xffa5e8a3);root.addView(state);
         Button overlay = button("1. Cho phép cửa sổ nổi", () -> {
             Intent i = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
@@ -115,6 +116,77 @@ public final class MainActivity extends Activity {
                     state.setText("Đã xóa các lịch sử học đã lưu.");
                 }).show();
         }));
+        root.addView(text("DỮ LIỆU ĐỂ HUẤN LUYỆN (OFFLINE)",17,Color.WHITE));
+        root.addView(text("Lưu sự kiện đã nhìn thấy: bài tay xác nhận, lượt ra bài, thay đổi số bài và đề xuất AI. Không lưu ảnh, tài khoản hoặc bài úp. Thông tin chưa chắc chắn được đánh dấu riêng; đề xuất AI không bị ghi nhầm là nước bạn thực sự đánh.",13,0xffbac4d2));
+        android.content.SharedPreferences training=getSharedPreferences("tracker_training",MODE_PRIVATE);
+        android.widget.CheckBox collect=new android.widget.CheckBox(this);
+        collect.setText("Tự lưu dữ liệu luyện AI trên thiết bị");
+        collect.setTextColor(Color.WHITE);
+        collect.setChecked(training.getBoolean("collect",true));
+        collect.setOnCheckedChangeListener((b,checked)->training.edit().putBoolean("collect",checked).apply());
+        root.addView(collect);
+        root.addView(text("Ghi kết quả ván vừa kết thúc (để tạo nhãn thật cho bộ dữ liệu):",14,Color.WHITE));
+        EditText netScore=new EditText(this);
+        netScore.setHint("Điểm hoặc tiền lãi/lỗ ròng (tùy chọn, có thể âm)");
+        netScore.setHintTextColor(0xffa9b4c6);netScore.setTextColor(Color.WHITE);
+        netScore.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL | InputType.TYPE_NUMBER_FLAG_SIGNED);
+        root.addView(netScore);
+        LinearLayout placements=new LinearLayout(this);
+        placements.setOrientation(LinearLayout.HORIZONTAL);
+        for(int place=1;place<=4;place++){
+            final int outcome=place;
+            Button rankButton=button("Hạng "+place,()->{
+                String id=training.getString("last_round_id","");
+                if(!TrainingDataStore.validRoundId(id)){
+                    state.setText("Chưa có ván vừa kết thúc để ghi nhận kết quả.");return;
+                }
+                String labeled=training.getString("labeled_round_id","");
+                if(id.equals(labeled)){
+                    state.setText("Ván vừa rồi đã được ghi nhận hạng, không ghi trùng.");return;
+                }
+                if(!training.getBoolean("collect",true)){
+                    state.setText("Bật lưu nhật ký nếu muốn ghi hạng cho dữ liệu huấn luyện.");return;
+                }
+                java.util.Map<String,Object> fields=TrainingDataStore.fields(
+                    "placement",outcome,"label_source","user_confirmed");
+                String scoreText=netScore.getText().toString().trim();
+                if(!scoreText.isEmpty()){
+                    try{
+                        double score=Double.parseDouble(scoreText);
+                        if(!Double.isFinite(score) || Math.abs(score)>1e12)throw new NumberFormatException();
+                        fields.put("net_score_user_entered",score);
+                    }catch(NumberFormatException invalid){
+                        state.setText("Điểm/tiền ròng không hợp lệ, vui lòng sửa hoặc để trống.");return;
+                    }
+                }
+                TrainingDataStore data=new TrainingDataStore(getFilesDir());
+                boolean ok=data.append("round_result",id,fields);
+                if(ok){training.edit().putString("labeled_round_id",id).apply();
+                    state.setText("Đã ghi nhận hạng "+outcome+" cho ván vừa rồi.");}
+                else state.setText("Không ghi được kết quả; kiểm tra bộ nhớ.");
+            });
+            rankButton.setTextSize(12);rankButton.setPadding(1,1,1,1);
+            placements.addView(rankButton,new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,1));
+        }
+        root.addView(placements);
+        root.addView(text("Dung lượng nhật ký: "+(new TrainingDataStore(getFilesDir()).bytes()/1024)+" KB; lưu tối đa hai tệp khoảng 8 MB.",13,0xffa5e8a3));
+        root.addView(button("Xuất dữ liệu huấn luyện JSONL",()->{
+            Intent save=new Intent(Intent.ACTION_CREATE_DOCUMENT);
+            save.addCategory(Intent.CATEGORY_OPENABLE);
+            save.setType("application/x-ndjson");
+            save.putExtra(Intent.EXTRA_TITLE,"chatheo-observations.jsonl");
+            startActivityForResult(save,REQUEST_EXPORT);
+        }));
+        root.addView(button("Xóa dữ liệu nhật ký huấn luyện",()->{
+            new android.app.AlertDialog.Builder(this).setTitle("Xóa nhật ký huấn luyện?")
+                .setMessage("Xóa các bản ghi sự kiện trong máy. Không xóa kho hồ sơ hành vi đối thủ cũ.")
+                .setNegativeButton("Hủy",(dialog,which)->{})
+                .setPositiveButton("Xóa",(dialog,which)->{
+                    new TrainingDataStore(getFilesDir()).clear();
+                    state.setText("Đã xóa nhật ký huấn luyện.");
+                }).show();
+        }));
         root.addView(text("Quyền riêng tư: hình ảnh và lịch sử học được xử lý trên thiết bị, không truy cập Internet.\nĐể quét cả bàn, chọn 'Toàn bộ màn hình' khi cấp quyền ghi màn hình.",13,0xffbdbdbd));
         ScrollView outer=new ScrollView(this);outer.addView(root);setContentView(outer);
     }
@@ -134,6 +206,16 @@ public final class MainActivity extends Activity {
     }
     @Override protected void onActivityResult(int request,int result,Intent data) {
         super.onActivityResult(request,result,data);
+        if(request==REQUEST_EXPORT){
+            if(result==RESULT_OK && data!=null && data.getData()!=null){
+                try(java.io.OutputStream output=getContentResolver().openOutputStream(data.getData())){
+                    if(output==null)throw new java.io.IOException("No output stream");
+                    int rows=new TrainingDataStore(getFilesDir()).exportTo(output);
+                    state.setText("Đã xuất "+rows+" sự kiện thành JSONL.");
+                }catch(Exception e){state.setText("Lỗi xuất dữ liệu: "+e.getMessage());}
+            }
+            return;
+        }
         if(request!=REQUEST_CAPTURE)return;
         if(result!=RESULT_OK || data==null){state.setText("Bạn chưa cấp quyền ghi màn hình.");return;}
         Intent it = new Intent(this,CaptureService.class);

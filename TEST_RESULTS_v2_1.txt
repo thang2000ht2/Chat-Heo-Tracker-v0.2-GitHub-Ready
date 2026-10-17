@@ -1,0 +1,22 @@
+Pure Java test results — v2.1
+
+TestRecentMoves: PASS
+TestTemporalCardEvidence: PASS
+TestCardWarnings: PASS
+TestStrategyAdvisor: PASS
+TestMonteCarloAdvisor: PASS
+TestLowestBlockRisk: PASS
+TestCardStateValidator: PASS
+TestOpponentBehavior: PASS
+TestContextualHandSampler: PASS
+TestAdaptiveOpponents: PASS
+TestOpponentArchive: PASS
+TestFinishPriority: PASS
+TestHandFanGeometry: PASS
+TestResidualHandQuality: PASS
+TestPartialHistoryRecovery: PASS
+TestHeoContextAndFallback: PASS
+TestOpeningTempoPolicy: PASS
+TestRedealDetector: PASS
+
+Android APK build: NOT PERFORMED (Android SDK unavailable).

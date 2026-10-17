@@ -375,6 +375,10 @@ final class MonteCarloAdvisor {
                 ResidualHandQuality.penalty(remainder)*0.55 - move.count*0.35;
             if(move.containsTwo && after!=0)cost+=3.0;
             if(after==0)cost-=12.0;
+            ArrayList<String> proposedCards=new ArrayList<>();
+            for(int j=0;j<engine.hand.size();j++)if((move.mask&(1<<j))!=0)
+                proposedCards.add(engine.hand.get(j));
+            cost+=OpeningTempoPolicy.extraCost(engine.hand,proposedCards,13,mode);
             if(cost<bestCost){bestCost=cost;best=move;}
         }
         if(best==null)return new Advice("BỎ LƯỢT","Chặn: chưa đủ dữ liệu");
@@ -475,6 +479,12 @@ final class MonteCarloAdvisor {
             for(int j=0;j<hand.size();j++)if((c.move.mask & (1<<j))==0)
                 residual.add(hand.get(j));
             cost+=(mode==StrategyMode.PLACEMENT?0.70:0.42)*ResidualHandQuality.penalty(residual);
+            // Early game: defend A/2 for re-entry and clear isolated 3/4/5/6.
+            // Do not blindly pick a triple of twos just because it sheds three cards.
+            ArrayList<String> proposedCards=new ArrayList<>();
+            for(int j=0;j<hand.size();j++)if((c.move.mask&(1<<j))!=0)
+                proposedCards.add(hand.get(j));
+            cost+=OpeningTempoPolicy.extraCost(hand,proposedCards,minOpp,mode);
             if(cost<best-1e-6 || (Math.abs(cost-best)<1e-6 &&
                     (selected==null || risk<selected.response))){
                 selected=c;best=cost;
