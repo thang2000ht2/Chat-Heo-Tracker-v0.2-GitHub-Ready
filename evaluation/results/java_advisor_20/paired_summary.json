@@ -1,0 +1,67 @@
+{
+  "research_only": true,
+  "rules": "UNVERIFIED REFERENCE, excludes off-turn chop and instant win",
+  "n_deals": 20,
+  "seats_per_deal": 4,
+  "seed": 213419,
+  "java_advisor_calls": 6556,
+  "release_rule": "at least +1 percentage point first-rate and cluster-bootstrap 95% CI above zero, no illegal/fallbacks",
+  "baseline_results": {
+    "lowest": {
+      "java_first_rate": 0.2375,
+      "delta_vs_lowest": -0.0125,
+      "delta_win_95pct_cluster_bootstrap": [
+        -0.075,
+        0.0625
+      ],
+      "delta_mean_rank": 0.1,
+      "fallbacks": 18,
+      "passed_release_gate": false
+    },
+    "max_shed": {
+      "java_first_rate": 0.175,
+      "delta_vs_lowest": 0.1,
+      "delta_win_95pct_cluster_bootstrap": [
+        0.0,
+        0.2
+      ],
+      "delta_mean_rank": -0.2875,
+      "fallbacks": 18,
+      "passed_release_gate": false
+    },
+    "save_twos": {
+      "java_first_rate": 0.175,
+      "delta_vs_lowest": 0.1,
+      "delta_win_95pct_cluster_bootstrap": [
+        0.0,
+        0.1875
+      ],
+      "delta_mean_rank": -0.2875,
+      "fallbacks": 18,
+      "passed_release_gate": false
+    },
+    "random": {
+      "java_first_rate": 0.375,
+      "delta_vs_lowest": 0.0625,
+      "delta_win_95pct_cluster_bootstrap": [
+        -0.0875,
+        0.2125
+      ],
+      "delta_mean_rank": -0.0125,
+      "fallbacks": 18,
+      "passed_release_gate": false
+    },
+    "strategic_pass": {
+      "java_first_rate": 0.275,
+      "delta_vs_lowest": 0.1375,
+      "delta_win_95pct_cluster_bootstrap": [
+        0.0125,
+        0.275
+      ],
+      "delta_mean_rank": -0.35,
+      "fallbacks": 18,
+      "passed_release_gate": false
+    }
+  },
+  "ANY_RELEASE_PASS": false
+}
