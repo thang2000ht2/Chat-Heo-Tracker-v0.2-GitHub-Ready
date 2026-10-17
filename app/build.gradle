@@ -6,8 +6,8 @@ android {
         applicationId 'vn.chatheotracker'
         minSdk 29
         targetSdk 35
-        versionCode 25
-        versionName '2.5-threat-evidence-preview' 
+        versionCode 27
+        versionName '2.7-reentry-bait-dataset' 
     }
     buildTypes { release { minifyEnabled false } }
     compileOptions {

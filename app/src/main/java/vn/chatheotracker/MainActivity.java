@@ -136,7 +136,7 @@ public final class MainActivity extends Activity {
         root.addView(text("Lưu sự kiện đã nhìn thấy: bài tay xác nhận, lượt ra bài, thay đổi số bài và đề xuất AI. Không lưu ảnh, tài khoản hoặc bài úp. Thông tin chưa chắc chắn được đánh dấu riêng; đề xuất AI không bị ghi nhầm là nước bạn thực sự đánh.",13,0xffbac4d2));
         android.content.SharedPreferences training=getSharedPreferences("tracker_training",MODE_PRIVATE);
         android.widget.CheckBox collect=new android.widget.CheckBox(this);
-        collect.setText("Tự lưu dữ liệu luyện AI trên thiết bị");
+        collect.setText("Lưu dữ liệu chơi để huấn luyện offline (không tự train)");
         collect.setTextColor(Color.WHITE);
         collect.setChecked(training.getBoolean("collect",true));
         collect.setOnCheckedChangeListener((b,checked)->training.edit().putBoolean("collect",checked).apply());

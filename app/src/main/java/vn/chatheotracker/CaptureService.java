@@ -102,6 +102,15 @@ public final class CaptureService extends Service {
     private boolean myTurn=false;
     private int turnFrames=0;
     private final ExecutorService adviceExecutor=Executors.newSingleThreadExecutor();
+    // Slow threat sampling must never delay a time-sensitive move suggestion.
+    private final ExecutorService threatExecutor=Executors.newSingleThreadExecutor();
+    private final java.util.concurrent.atomic.AtomicBoolean threatTaskRunning=
+        new java.util.concurrent.atomic.AtomicBoolean(false);
+    private final AdviceReentryDetector adviceReentry=new AdviceReentryDetector();
+    private final AdviceRetryGate adviceRetryGate=new AdviceRetryGate();
+    private final BaitBehaviorSignals baitSignals=new BaitBehaviorSignals();
+    private String confirmedPassLeadCleared="";
+    private String lastLoggedThreatSignature="";
     private boolean autoAdvicePending=false;
     private int autoAdviceScanFrames=0;
     private int absentTurnFrames=0;
@@ -197,6 +206,7 @@ public final class CaptureService extends Service {
                 if(boardStable && !currentBoard.isEmpty() && roundId!=null){
                     trainEvent("opponent_pass","seat",seat,
                         "lead",new ArrayList<>(currentBoard),
+                        "lead_is_two",currentBoard.size()==1 && hasHeo(currentBoard),
                         "opponent_counts",knownCounts.clone(),
                         "confidence","user_confirmed", "source","user_confirmation");
                     if(knownCounts[seat]>=0){
@@ -208,6 +218,31 @@ public final class CaptureService extends Service {
                             if(history.size()>8)history.remove(0);
                             threatDirty=true;
                         }
+                    }
+                    // Optional, fully user-confirmed fallback: if our last
+                    // verified play was followed by three confirmed passes,
+                    // the next suggestion is an OPENING, even if the old cards
+                    // remain painted on the table during the transition.
+                    boolean allPassed=true;
+                    for(int p=0;p<3;p++){
+                        boolean found=false;
+                        for(ObservedPass pass:confirmedPasses[p]){
+                            if(pass.lead.equals(currentBoard) && pass.countAtPass==knownCounts[p]){
+                                found=true;break;
+                            }
+                        }
+                        if(!found)allPassed=false;
+                    }
+                    if(allPassed && myPlayed.containsAll(currentBoard) &&
+                            !boardSignature(currentBoard).equals(confirmedPassLeadCleared)){
+                        confirmedPassLeadCleared=boardSignature(currentBoard);
+                        if(myTurn){
+                            turnEpoch++;
+                            autoAdvicePending=true;autoAdviceScanFrames=0;
+                            adviceRequestId++;
+                        }
+                        trainEvent("advice_reentry","reason","three_user_confirmed_passes",
+                            "confidence","user_confirmed_on_own_lead");
                     }
                 }
             }
@@ -226,6 +261,7 @@ public final class CaptureService extends Service {
                     getSharedPreferences("tracker_strategy",MODE_PRIVATE).edit()
                         .putString("hand_source","manual").apply();
                     adviceRequestId++;
+                    threatEpoch++;threatDirty=true;lastThreatScan=0;
                 }
                 refresh();
             }
@@ -246,6 +282,7 @@ public final class CaptureService extends Service {
                     for(RecentMoves h:playerHistory)h.remove(c);
                     otherHistory.remove(c);
                 }
+                threatEpoch++;threatDirty=true;lastThreatScan=0;
             }
             refresh();return START_NOT_STICKY;
         }
@@ -426,6 +463,29 @@ public final class CaptureService extends Service {
                         suggestRequested=false;adviceRequestId++;turnEnded=true;
                     }
                 }
+                // Some tables keep the green action control visible through a
+                // sequence of confirmed passes, so the false->true button edge
+                // can be lost. An occupied board that stably clears is another
+                // indication that the next lead may be ours.
+                if(adviceReentry.observe(myTurn,boardStable,currentBoard,now) &&
+                        !autoAdvicePending){
+                    turnEpoch++;
+                    autoAdvicePending=true;
+                    autoAdviceScanFrames=0;
+                    turnBegan=true;
+                    trainEvent("advice_reentry","reason","occupied_board_cleared",
+                        "confidence","stable_public_board_not_pass_proof");
+                }
+                // If an earlier recommendation was withheld because the scan
+                // was incomplete, retry automatically once REAL input changes.
+                // No loop on the same missing-card state.
+                if(myTurn && !autoAdvicePending && !suggestRequested &&
+                    adviceRetryGate.shouldRetry(adviceFingerprint(),
+                        boardStable && handEverVerified && !handCards.isEmpty(),now)){
+                    autoAdvicePending=true;autoAdviceScanFrames=0;
+                    trainEvent("advice_retry","reason","new_verified_scan_evidence",
+                        "confidence","state_changed_not_a_new_play");
+                }
                 if(myTurn && autoAdvicePending){
                     autoAdviceScanFrames++;
                     // At least three post-turn frames for screen / card history stabilization.
@@ -518,17 +578,22 @@ public final class CaptureService extends Service {
     }
     private void updateHandAfterPlay(Collection<String> cards){
         if(handCards.isEmpty())return;
-        boolean changed=false;
+        ArrayList<String> confirmedOverlap=new ArrayList<>();
         for(String c:cards){
             if(handCards.remove(c)){
                 myPlayed.add(c);
                 otherPlayed.remove(c);otherHistory.remove(c);
-                changed=true;
+                confirmedOverlap.add(c);
             }
         }
-        if(changed){
-            trainEvent("hand_cards_removed","cards",new ArrayList<>(cards),
+        if(!confirmedOverlap.isEmpty()){
+            // Record only the overlap actually removed from OUR verified hand;
+            // the surrounding board may include other players' plays.
+            trainEvent("hand_cards_removed","cards",confirmedOverlap,
                 "confidence","observed_board_overlap");
+            trainEvent("local_play_observed","cards",confirmedOverlap,
+                "played_two",hasHeo(confirmedOverlap),
+                "confidence","fan_and_board_overlap_not_button_proof");
             persistCurrentHand();
         }
     }
@@ -625,8 +690,23 @@ public final class CaptureService extends Service {
                 }
                 playerHistory[drop.player].record(accepted);
                 if(!accepted.isEmpty()){
+                    BaitBehaviorSignals.Observation signal=drop.delta==accepted.size() ?
+                        baitSignals.record(drop.player,accepted,
+                            handEverVerified?handCards:null,knownCounts[drop.player]):
+                        BaitBehaviorSignals.fromConfirmedPlay(Collections.emptyList(),null,-1);
+                    if(signal.possibleBaitSignal()){
+                        trainEvent("bait_candidate","seat",drop.player,"cards",accepted,
+                            "signal",signal.label(),"my_heo_verified",true,
+                            "remaining_after",knownCounts[drop.player],
+                            "confidence","weak_observable_pattern_not_hidden_intent");
+                    }
                     trainEvent("opponent_move","seat",drop.player,"cards",accepted,
                         "count_decrease",drop.delta,"remaining_after",knownCounts[drop.player],
+                        "local_hand_count",handEverVerified?handCards.size():-1,
+                        "local_heo_visible",handEverVerified && hasHeo(handCards),
+                        "lead_previous_frame",new ArrayList<>(currentBoard),
+                        "lead_context_confidence","not_verified_same_turn",
+                        "opponent_counts",knownCounts.clone(),
                         "confidence",drop.delta==accepted.size()
                         ?"matched_exact":"partial_card_observation");
                     learning[drop.player].record(accepted);
@@ -771,6 +851,8 @@ public final class CaptureService extends Service {
         Arrays.fill(knownCounts,-1);Arrays.fill(lastCandidates,-1);
         Arrays.fill(candidateFrames,0);Arrays.fill(missingCards,0);
         recentCards.clear();sawAnyLowerCounter=false;
+        baitSignals.resetRound();adviceReentry.reset();adviceRetryGate.reset();
+        confirmedPassLeadCleared="";lastLoggedThreatSignature="";
         threatEpoch++;lastThreatScan=0;threatDirty=true;
         for(List<ObservedPass> l:confirmedPasses)l.clear();
         Arrays.fill(threatLabels,"3ĐT — · 4ĐT — · TQ —");
@@ -863,32 +945,49 @@ public final class CaptureService extends Service {
      * This describes unverified sampled worlds, not a real-world chop probability.
      */
     private void scheduleThreatSnapshot(){
+        // Keep at most one expensive hypothetical-deal simulation in flight.
+        // A later changed table is marked dirty again instead of queuing an
+        // unbounded backlog of already-obsolete threat computations.
+        if(!threatTaskRunning.compareAndSet(false,true)){
+            synchronized(stateLock){threatDirty=true;}
+            return;
+        }
         final LinkedHashSet<String> mine,seen;
         final int[] counts;
         final List<List<List<String>>> history=new ArrayList<>();
         final List<List<ObservedPass>> passHistory=new ArrayList<>();
         final int version;
+        final boolean handTrusted;
         synchronized(stateLock){
             mine=new LinkedHashSet<>(handCards);
             seen=observedCards();counts=knownCounts.clone();
+            handTrusted=handEverVerified && !mine.isEmpty() && Collections.disjoint(mine,seen);
             for(LearnedOpponentHistory h:learning)history.add(h.snapshot());
             for(List<ObservedPass> events:confirmedPasses)passHistory.add(new ArrayList<>(events));
             version=++threatEpoch;
         }
-        adviceExecutor.execute(()->{
+        threatExecutor.execute(()->{
             ThreatScenarioSampler.Seat[] estimate=null;
-            try{estimate=ThreatScenarioSampler.sample(mine,seen,counts,history,passHistory,
+            try{if(handTrusted)estimate=ThreatScenarioSampler.sample(mine,seen,counts,history,passHistory,
                 Objects.hash(mine,seen,Arrays.hashCode(counts),passHistory.size()));}
-            catch(IllegalArgumentException ignored){}
+            catch(Exception error){android.util.Log.w("Tracker","Threat sample unavailable",error);}
+            finally{threatTaskRunning.set(false);}
             final ThreatScenarioSampler.Seat[] values=estimate;
             mainHandler.post(()->{
                 synchronized(stateLock){
                     if(stopping || version!=threatEpoch)return;
+                    StringBuilder nextSignature=new StringBuilder(Arrays.toString(counts));
+                    if(values!=null)for(int k=0;k<3;k++){
+                        for(int j=0;j<3;j++)nextSignature.append('|').append(values[k].percent(j));
+                    }
+                    boolean newState=!nextSignature.toString().equals(lastLoggedThreatSignature);
+                    if(newState)lastLoggedThreatSignature=nextSignature.toString();
                     for(int k=0;k<3;k++){
                         threatLabels[k]=values==null?"3ĐT — · 4ĐT — · TQ —":values[k].concise();
-                        if(values!=null){
-                            // Predictions are stored separately from actual observed plays.
-                            // They are NOT ground-truth labels for model training.
+                        if(values!=null && newState){
+                            // Predictions are not ground-truth observations. Avoid
+                            // flooding the bounded training log with repeated
+                            // Monte Carlo estimates for the identical table.
                             trainEvent("threat_sample","seat",k,
                                 "sample_3_pair_run_percent",values[k].percent(0),
                                 "sample_4_pair_run_percent",values[k].percent(1),
@@ -1069,13 +1168,21 @@ public final class CaptureService extends Service {
         synchronized(stateLock){suggestRequested=true;suggestionScanFrames=0;}
         showPendingAdvice("ĐANG QUÉT BÀI…");
     }
+    private static String boardSignature(Collection<String> cards){
+        ArrayList<String> sorted=new ArrayList<>(cards);
+        Collections.sort(sorted);
+        return String.join(" ",sorted);
+    }
     private void updateBoard(Collection<String> latest){
         ArrayList<String> cards=new ArrayList<>(latest);
         Collections.sort(cards);
-        String key=android.text.TextUtils.join(" ",cards);
+        String key=boardSignature(cards);
         if(key.equals(boardCandidate))boardFrames++;
         else{boardCandidate=key;boardFrames=1;boardStable=false;}
-        if(boardFrames>=2){currentBoard=cards;boardStable=true;}
+        if(boardFrames>=2){
+            currentBoard=cards;boardStable=true;
+            if(!key.equals(confirmedPassLeadCleared))confirmedPassLeadCleared="";
+        }
     }
     /** Only a complete and stable visible fan may repair a stale tracked hand.
      * The previous full 13-card scan remains the default way to initialize a deal.
@@ -1129,6 +1236,12 @@ public final class CaptureService extends Service {
         for(String c:hand)if(c.startsWith("2"))return true;
         return false;
     }
+    /** Stable current inputs for automatic *recovery* after a blocked advice. */
+    private String adviceFingerprint(){
+        return boardStable+"|"+handEverVerified+"|"+handCards.hashCode()+"|"+
+            observedCards().hashCode()+"|"+currentBoard.hashCode()+"|"+
+            Arrays.toString(knownCounts);
+    }
     /** Snapshot and analyze off the screen-capture thread. Never block new video frames. */
     private void runFreshAdvice(){
         final LinkedHashSet<String> hand,seen;
@@ -1142,7 +1255,11 @@ public final class CaptureService extends Service {
             boardOK=boardStable;
             hand=new LinkedHashSet<>(handCards);
             seen=observedCards();
-            lead=new ArrayList<>(currentBoard);
+            // Three explicitly confirmed passes over our own latest lead
+            // create a fresh opening even if the renderer leaves old cards up.
+            boolean openingByPass=boardStable && !currentBoard.isEmpty() &&
+                confirmedPassLeadCleared.equals(boardSignature(currentBoard));
+            lead=openingByPass?new ArrayList<>():new ArrayList<>(currentBoard);
             counts=knownCounts.clone();
             for(LearnedOpponentHistory h:learning)histories.add(h.snapshot());
             PartialDeckState.Result check=PartialDeckState.check(hand,seen,counts);
@@ -1156,6 +1273,7 @@ public final class CaptureService extends Service {
             overlap=!Collections.disjoint(hand,seen) || !Collections.disjoint(hand,lead);
             epoch=turnEpoch;
             request=++adviceRequestId;
+            adviceRetryGate.requested(adviceFingerprint(),SystemClock.elapsedRealtime());
         }
         adviceExecutor.execute(()->{
             final MonteCarloAdvisor.Advice result;
@@ -1187,6 +1305,7 @@ public final class CaptureService extends Service {
                 synchronized(stateLock){
                     if(stopping || !myTurn || turnEpoch!=epoch || adviceRequestId!=request)return;
                 }
+                adviceRetryGate.finished(result.title.startsWith("QUÉT LẠI"));
                 trainEvent("advice_proposed","title",result.title,
                     "detail",result.detail,"hand_count",hand.size(),
                     "seen_count",seen.size(),"lead",lead,"opponent_counts",counts,
@@ -1345,7 +1464,8 @@ public final class CaptureService extends Service {
                     playerRows[i].setVisibility(n>0?View.VISIBLE:View.GONE);
                 }
                 if(threatRows[i]!=null){
-                    threatRows[i].setText(threatLabels[i]);
+                    String baitNote=baitSignals.note(i);
+                    threatRows[i].setText(threatLabels[i]+(baitNote.isEmpty()?"":"\n"+baitNote));
                     threatRows[i].setVisibility(threatLabels[i].isEmpty()?View.GONE:View.VISIBLE);
                 }
                 if(p!=null)p.setVisibility(n>0||!threatLabels[i].isEmpty()?View.VISIBLE:View.GONE);
@@ -1372,10 +1492,11 @@ public final class CaptureService extends Service {
                 otherRow.setText(recentPlaySpans(otherHistory, "Khác  "));
             }
             List<String> remaining=remainingCards();
-            // Risk colors must use cards opponents COULD hold, not my known cards.
-            ArrayList<String> unknown=new ArrayList<>(remaining);
-            unknown.removeAll(handCards);
-            remainingRow.setText(buildRemainingSpans(remaining,unknown));
+            // Every red/green suit must be outside my VERIFIED hand and not public.
+            // "Chưa đánh" itself still includes my own cards, by definition.
+            OpponentCandidatePool.Result pool=OpponentCandidatePool.analyze(
+                remaining,handCards,handEverVerified,knownCounts);
+            remainingRow.setText(buildRemainingSpans(remaining,pool));
             // No scanner diagnostic row here: it crowds the fan and obscures play.
         }
         android.util.DisplayMetrics metrics=new android.util.DisplayMetrics();
@@ -1405,46 +1526,50 @@ public final class CaptureService extends Service {
         }
         return sb;
     }
-    /** Green: rank can participate in a run of 3/4 consecutive remaining pairs.
-     * Red takes priority if all 4 suits of the rank remain unseen.
-     * This is a *possibility across the unobserved pool*, NOT proof that
-     * one opponent actually holds the full combination.
+    /** Color only the *suits* opponents could still hold, never a whole rank
+     * that includes one of my own cards. Red: all 4 suits are outside my hand.
+     * Green: this rank can belong to a consecutive-pairs run in the shared
+     * possible pool. Gray: suit is in my verified hand. Such colors do not
+     * establish that all needed cards belong to one particular opponent.
      */
-    private CharSequence buildRemainingSpans(Collection<String> remaining,Collection<String> unknown){
-        CardWarnings.Result warnings=CardWarnings.analyze(unknown);
-        HashSet<String> unseen=new HashSet<>(remaining);
+    private CharSequence buildRemainingSpans(Collection<String> remaining,OpponentCandidatePool.Result pool){
         SpannableStringBuilder sb=new SpannableStringBuilder();
-        sb.append("Chưa đánh (").append(String.valueOf(remaining.size())).append("): ");
-        if(warnings.hasTriple||warnings.hasQuad){
-            int a=sb.length();
-            if(warnings.hasTriple)sb.append("3ĐT");
-            if(warnings.hasTriple&&warnings.hasQuad)sb.append("/");
-            if(warnings.hasQuad)sb.append("4ĐT");
-            sb.append("  ");
-            sb.setSpan(new ForegroundColorSpan(0xffa9ffb5),a,sb.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-            sb.setSpan(new StyleSpan(android.graphics.Typeface.BOLD),a,sb.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-        }
+        sb.append("Chưa đánh (").append(String.valueOf(remaining.size())).append(") · ");
+        int summaryStart=sb.length();
+        sb.append(pool.compactCounts()).append("  ");
+        if(pool.reliable)sb.setSpan(new ForegroundColorSpan(0xffabd7ee),summaryStart,sb.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        else sb.setSpan(new ForegroundColorSpan(0xffffc07e),summaryStart,sb.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        HashSet<String> unplayed=new HashSet<>(remaining);
         String[] ranks=CardWarnings.RANKS;
         String[] suits={"S","C","D","H"};
         for(int i=0;i<ranks.length;i++){
             String rank=ranks[i];
-            int count=0;
-            for(String suit:suits)if(unseen.contains(rank+suit))count++;
-            if(count==0)continue;
-            int start=sb.length();
+            boolean exists=false;
+            for(String suit:suits)if(unplayed.contains(rank+suit)){exists=true;break;}
+            if(!exists)continue;
             sb.append(rank);
             for(String suit:suits){
-                if(unseen.contains(rank+suit))sb.append(suitSymbol(suit));
-            }
-            if(count==4 && warnings.remainingByRank[i]==4){
-                sb.setSpan(new ForegroundColorSpan(0xffff8585),start,sb.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-                sb.setSpan(new BackgroundColorSpan(0xff49242c),start,sb.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-                sb.setSpan(new StyleSpan(android.graphics.Typeface.BOLD),start,sb.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-            }else if(warnings.inQuad[i]||warnings.inTriple[i]){
-                sb.setSpan(new ForegroundColorSpan(0xffa5ffbd),start,sb.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-                sb.setSpan(new BackgroundColorSpan(0xff194b35),start,sb.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-                sb.setSpan(new StyleSpan(android.graphics.Typeface.BOLD),start,sb.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-                if(warnings.inQuad[i])sb.setSpan(new UnderlineSpan(),start,sb.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                String card=rank+suit;
+                if(!unplayed.contains(card))continue;
+                int a=sb.length();
+                sb.append(suitSymbol(suit));
+                int b=sb.length();
+                OpponentCandidatePool.Cue cue=pool.cue(card);
+                if(cue==OpponentCandidatePool.Cue.MINE){
+                    // Keep my own unplayed cards visible, but neutral.
+                    sb.setSpan(new ForegroundColorSpan(0xff8390a2),a,b,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                }else if(cue==OpponentCandidatePool.Cue.POSSIBLE_QUARTET){
+                    sb.setSpan(new ForegroundColorSpan(0xffff8585),a,b,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                    sb.setSpan(new BackgroundColorSpan(0xff49242c),a,b,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                    sb.setSpan(new StyleSpan(android.graphics.Typeface.BOLD),a,b,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                }else if(cue==OpponentCandidatePool.Cue.POSSIBLE_4_PAIRS ||
+                         cue==OpponentCandidatePool.Cue.POSSIBLE_3_PAIRS){
+                    sb.setSpan(new ForegroundColorSpan(0xffa5ffbd),a,b,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                    sb.setSpan(new BackgroundColorSpan(0xff194b35),a,b,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                    sb.setSpan(new StyleSpan(android.graphics.Typeface.BOLD),a,b,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                    if(cue==OpponentCandidatePool.Cue.POSSIBLE_4_PAIRS)
+                        sb.setSpan(new UnderlineSpan(),a,b,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                }
             }
             sb.append("  ");
         }
@@ -1469,9 +1594,10 @@ public final class CaptureService extends Service {
         ArrayList<String> remain=new ArrayList<>();
         String[] ranks={"3","4","5","6","7","8","9","10","J","Q","K","A","2"};
         String[] suits={"S","C","D","H"};
+        Set<String> alreadySeen=observedCards();
         for(String r:ranks)for(String s:suits){
             String c=r+s;
-            if(!played.contains(c))remain.add(c);
+            if(!alreadySeen.contains(c))remain.add(c);
         }
         return remain;
     }
@@ -1480,6 +1606,7 @@ public final class CaptureService extends Service {
         stopping=true;
         mainHandler.removeCallbacks(captureWatchdog);
         adviceExecutor.shutdownNow();
+        threatExecutor.shutdownNow();
         if(imageReader!=null){imageReader.setOnImageAvailableListener(null,null);}
         if(virtualDisplay!=null){virtualDisplay.release();virtualDisplay=null;}
         if(imageReader!=null){imageReader.close();imageReader=null;}
