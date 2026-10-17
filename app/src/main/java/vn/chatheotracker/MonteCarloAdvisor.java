@@ -429,6 +429,13 @@ final class MonteCarloAdvisor {
             // blocking, chops and opponents about to finish as additional costs.
             double cost=FinishPriority.cost(remainingTurns,after,c.move.count,
                 reply,chop,minOpp,mode);
+            // Compare the hand SHAPE after the proposed play, not just the count.
+            // Unrelated small singles and poor re-entry control are worse than
+            // coherent future pairs/straights, especially in ranked placement mode.
+            ArrayList<String> residual=new ArrayList<>();
+            for(int j=0;j<hand.size();j++)if((c.move.mask & (1<<j))==0)
+                residual.add(hand.get(j));
+            cost+=(mode==StrategyMode.PLACEMENT?0.70:0.42)*ResidualHandQuality.penalty(residual);
             if(cost<best-1e-6 || (Math.abs(cost-best)<1e-6 &&
                     (selected==null || risk<selected.response))){
                 selected=c;best=cost;

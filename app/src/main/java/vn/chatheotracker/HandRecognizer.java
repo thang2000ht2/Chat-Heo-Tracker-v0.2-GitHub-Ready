@@ -36,82 +36,68 @@ final class HandRecognizer {
     static final class Result {
         final List<String> cards;
         final boolean complete;
-        Result(List<String> cards, boolean complete){this.cards=cards;this.complete=complete;}
-    }
-    /** Requires a full, 13-card visible fan with high-confidence individual rank/suit matches. */
-    Result recognizeFullHand(Bitmap b){
-        if(b.getWidth()!=2048||b.getHeight()!=942)return new Result(Collections.emptyList(),false);
-        // A continuous bright strip near y=715 is the card fan, unlike dark table/chat.
-        int first=-1,last=-1,bestLen=0,start=-1;
-        final int y=715;
-        for(int x=350;x<=1820;x++){
-            int color=b.getPixel(x,y);
-            boolean white=Color.red(color)>205&&Color.green(color)>205&&Color.blue(color)>205;
-            if(white&&start<0)start=x;
-            if((!white||x==1820)&&start>=0){
-                int end=white?x+1:x;
-                if(end-start>bestLen){first=start;last=end;bestLen=end-start;}
-                start=-1;
-            }
+        final String diagnosis;
+        Result(List<String> cards, boolean complete){this(cards,complete,complete?"OK":"CHƯA RÕ");}
+        Result(List<String> cards, boolean complete,String diagnosis){
+            this.cards=cards;this.complete=complete;this.diagnosis=diagnosis;
         }
-        // For 13 fanned cards the strip is ~1,295px wide. Do not guess on shorter hands.
-        if(bestLen<1250||bestLen>1355||rankTemplates.size()!=13||suitTemplates.size()!=4)
-            return new Result(Collections.emptyList(),false);
-        final int x0=first-3, top=710;
-        ArrayList<String> cards=new ArrayList<>();
-        for(int index=0;index<13;index++){
-            int x=x0+(int)Math.round(index*94.6);
-            boolean[][] r=extract(b,x+9,top+11,x+73,top+67,32,40,true);
-            boolean[][] s=extract(b,x+8,top+71,x+69,top+129,28,28,false);
-            if(r==null||s==null)return new Result(cards,false);
-            Match rank=classify(r,rankTemplates),suit=classify(s,suitTemplates);
-            // The suits ♠/♣ are visually similar; require separation from second choice.
-            if(rank.score<0.84||rank.margin<0.035||suit.score<0.89||suit.margin<0.018)
-                return new Result(cards,false);
-            String card=rank.label+suit.label;
-            if(cards.contains(card))return new Result(cards,false);
-            cards.add(card);
-        }
-        return new Result(cards,cards.size()==13);
     }
-    /** Re-scan a shorter, fully visible fan after cards have been played.
-     * Never infer cards hidden by animations: the detected fan length must match an
-     * integer card count and every corner must pass the original confidence gates.
+    /** Full initial hand and later short hands share a single geometry search.
+     * Scan multiple near-edge rows to tolerate small shifts and game UI scaling.
+     * Conservative classification and the caller's multi-frame confirmation remain required.
      */
+    Result recognizeFullHand(Bitmap b){
+        Result r=recognizeVisibleHand(b);
+        return r.complete && r.cards.size()==13?r:
+            new Result(r.cards,false,r.complete?"ĐANG ĐỌC TAY BÀI":"THIẾU 13 · "+r.diagnosis);
+    }
     Result recognizeVisibleHand(Bitmap b){
-        if(b.getWidth()!=2048||b.getHeight()!=942 || rankTemplates.size()!=13||suitTemplates.size()!=4)
-            return new Result(Collections.emptyList(),false);
-        int first=-1,bestLen=0,start=-1;
-        final int top=710,y=715;
-        for(int x=350;x<=1820;x++){
-            int v=b.getPixel(x,y);
-            boolean white=Color.red(v)>205&&Color.green(v)>205&&Color.blue(v)>205;
-            if(white&&start<0)start=x;
-            if((!white||x==1820)&&start>=0){
-                int end=white?x+1:x;
-                if(end-start>bestLen){first=start;bestLen=end-start;}
-                start=-1;
+        if(b.getWidth()!=2048 || b.getHeight()!=942 || rankTemplates.size()!=13 || suitTemplates.size()!=4)
+            return new Result(Collections.emptyList(),false,"SAI KHUNG / THIẾU MẪU");
+        HandFanGeometry.Fan best=null;
+        for(int y=706;y<=723;y+=2){
+            boolean[] strip=new boolean[1471];
+            for(int x=350;x<=1820;x++){
+                int rgb=b.getPixel(x,y);
+                strip[x-350]=Color.red(rgb)>202&&Color.green(rgb)>202&&Color.blue(rgb)>202;
+            }
+            HandFanGeometry.Fan found=HandFanGeometry.inRow(strip,350,y);
+            if(found==null)continue;
+            // Prefer 13 full cards over a partially hidden row. If all rows see the
+            // same number, prefer the row at the top of the fan (not suit artwork).
+            if(best==null || found.count>best.count ||
+                (found.count==best.count && found.error<best.error))best=found;
+        }
+        if(best==null)return new Result(Collections.emptyList(),false,"KHÔNG THẤY QUẠT");
+        // White strip is measured from the fan top. The rank/suit corner boxes
+        // are at fixed offsets relative to the start, but allow slight variation.
+        Result partial=new Result(Collections.emptyList(),false,"BÀI BỊ CHE / LỆCH GÓC");
+        for(int dx:new int[]{0,-3,3,-6,6}){
+            for(int dy:new int[]{0,-2,2}){
+                int x0=best.left-3+dx;
+                int top=best.row-5+dy; // y=715 maps to reference top=710
+                ArrayList<String> cards=new ArrayList<>();
+                String failure="KHÔNG ĐỌC RÕ GÓC BÀI";
+                for(int i=0;i<best.count;i++){
+                    int x=x0+(int)Math.round(i*94.6);
+                    boolean[][] rank=extract(b,x+9,top+11,x+73,top+67,32,40,true);
+                    boolean[][] suit=extract(b,x+8,top+71,x+69,top+129,28,28,false);
+                    if(rank==null||suit==null){failure="GÓC BÀI BỊ CHE";break;}
+                    Match r=classify(rank,rankTemplates),s=classify(suit,suitTemplates);
+                    // Video compression softens the edges. Slightly relaxed thresholds
+                    // paired with a unique-card gate and three stable screen frames.
+                    if(r.score<0.79 || r.margin<0.022 || s.score<0.84 || s.margin<0.014){
+                        failure="MẶT BÀI CHƯA RÕ";break;
+                    }
+                    String card=r.label+s.label;
+                    if(cards.contains(card)){failure="BÀI TRÙNG – QUÉT LẠI";break;}
+                    cards.add(card);
+                }
+                if(cards.size()==best.count)return new Result(cards,true,"OK");
+                if(cards.size()>partial.cards.size())partial=new Result(cards,false,failure);
             }
         }
-        if(first<0||bestLen<140)return new Result(Collections.emptyList(),false);
-        int n=(int)Math.round((bestLen-160.0)/94.6)+1;
-        if(n<1||n>13 || Math.abs(bestLen-(160+(n-1)*94.6))>55)
-            return new Result(Collections.emptyList(),false);
-        int x0=first-3;
-        ArrayList<String> cards=new ArrayList<>();
-        for(int i=0;i<n;i++){
-            int x=x0+(int)Math.round(i*94.6);
-            boolean[][] r=extract(b,x+9,top+11,x+73,top+67,32,40,true);
-            boolean[][] t=extract(b,x+8,top+71,x+69,top+129,28,28,false);
-            if(r==null||t==null)return new Result(cards,false);
-            Match rr=classify(r,rankTemplates),ss=classify(t,suitTemplates);
-            if(rr.score<0.84||rr.margin<0.035||ss.score<0.89||ss.margin<0.018)
-                return new Result(cards,false);
-            String card=rr.label+ss.label;
-            if(cards.contains(card))return new Result(cards,false);
-            cards.add(card);
-        }
-        return new Result(cards,cards.size()==n);
+        return partial;
     }
     private static boolean ink(int a) {
         int r=Color.red(a),g=Color.green(a),b=Color.blue(a);

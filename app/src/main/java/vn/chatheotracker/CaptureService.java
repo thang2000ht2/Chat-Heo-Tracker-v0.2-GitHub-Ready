@@ -47,7 +47,12 @@ public final class CaptureService extends Service {
     private final View[] panels=new View[4];
     private final WindowManager.LayoutParams[] panelParams=new WindowManager.LayoutParams[4];
     private final TextView[] playerRows=new TextView[3];
-    private TextView handRow, otherRow, remainingRow, status;
+    private TextView handRow, otherRow, remainingRow;
+    private TextView scanBadge;
+    private WindowManager.LayoutParams scanBadgeParams;
+    private volatile String scanDiagnosis="CHƯA QUÉT";
+    private volatile int scanVisibleCards=0;
+    private long lastScanBadgeUpdate=0;
     // Only this small top-left window accepts touches. Card HUD windows are pass-through.
     private TextView resetButton, suggestButton, suggestionText;
     private WindowManager.LayoutParams resetButtonParams, suggestButtonParams, suggestionPanelParams;
@@ -61,6 +66,7 @@ public final class CaptureService extends Service {
             long now=SystemClock.elapsedRealtime();
             boolean streamStalled=lastFrameArrived>0 && now-lastFrameArrived>7000;
             boolean decodeStalled=lastFrameDecoded>0 && now-lastFrameDecoded>7000;
+            if(streamStalled || decodeStalled)setScanStatus("mất khung hình");
             if((streamStalled || decodeStalled) && now-lastRecoveryAttempt>15000){
                 lastRecoveryAttempt=now;
                 workerHandler.post(()->rebindCaptureSurface());
@@ -279,6 +285,7 @@ public final class CaptureService extends Service {
             old.close();
             recentCards.clear();
             lastScanned=0;
+            setScanStatus("nối lại luồng hình");
             android.util.Log.i("Tracker","Reconnected stalled image surface");
         }catch(Exception e){
             android.util.Log.e("Tracker","Capture reconnection failed; new screen permission may be needed",e);
@@ -309,7 +316,7 @@ public final class CaptureService extends Service {
             int[] counts=countRecognizer.read(normalized);
             boolean turnNow=LocalTurnDetector.isMyTurn(normalized);
             // Nicknames change rarely. Reading them every frame adds delay and OCR noise.
-            boolean readSeats=scanFrameIndex%4==0;
+            boolean readSeats=scanFrameIndex%8==0;
             String[] seatNames=readSeats?SeatVisualSignature.read(normalized):null;
             // Scan the user's fan more frequently when absent, inconsistent, or the
             // player is about to act; otherwise run it every second frame.
@@ -317,12 +324,14 @@ public final class CaptureService extends Service {
                 || scanFrameIndex%2==0;
             HandRecognizer.Result myCards=null;
             if(readHand){
+                // Full and partial fans now share one recognizer. Calling both used
+                // to repeat costly image processing on every unsuccessful frame.
                 myCards=handRecognizer.recognizeVisibleHand(normalized);
-                if(!myCards.complete && handCards.isEmpty())
-                    myCards=handRecognizer.recognizeFullHand(normalized);
             }
             normalized.recycle();
             lastFrameDecoded=SystemClock.elapsedRealtime();
+            // Recognition and reconciliation are separate checks. Readable card glyphs
+            // must not be mistaken for a verified hand if the deck totals disagree.
             boolean changed,trySuggestion=false,turnBegan=false,turnEnded=false;
             synchronized(stateLock){
                 boolean occupantChanged=readSeats && handleSeatIdentities(seatNames,counts);
@@ -364,6 +373,21 @@ public final class CaptureService extends Service {
                     }
                 }
             }
+            if(now-lastScanBadgeUpdate>1400){
+                lastScanBadgeUpdate=now;
+                String state;
+                synchronized(stateLock){
+                    if(!handCards.isEmpty()){
+                        if(conserved(handCards,observedCards(),knownCounts))
+                            state=handCards.size()+" lá ✓";
+                        else state=handCards.size()+" lá · lệch dữ liệu";
+                    }else if(myCards!=null){
+                        state=myCards.complete?(myCards.cards.size()+" lá · chưa đồng bộ"):
+                            (myCards.cards.size()+" lá · "+myCards.diagnosis);
+                    }else state="đã nhận hình";
+                }
+                setScanStatus(state);
+            }
             if(changed)mainHandler.post(this::refresh);
             if(turnBegan)mainHandler.post(()->showPendingAdvice("ĐANG QUÉT BÀI…"));
             if(turnEnded)mainHandler.post(()->{
@@ -372,7 +396,10 @@ public final class CaptureService extends Service {
                 if(panels[3]!=null)panels[3].setVisibility(View.VISIBLE);
             });
             if(trySuggestion)runFreshAdvice();
-        }catch(Exception e){android.util.Log.w("Tracker","Frame scan error",e);}
+        }catch(Exception e){
+            android.util.Log.w("Tracker","Frame scan error",e);
+            setScanStatus("lỗi khung hình");
+        }
         finally {if(image!=null)image.close();}
     }
     /** Accept only a complete, stable, 13-card fan; never count partial guesses as a hand.
@@ -641,6 +668,7 @@ public final class CaptureService extends Service {
         });
     }
     private void manualReset(){
+        setScanStatus("reset · quét mới");
         synchronized(stateLock){
             resetRoundInternal();
             ignoreCardsUntil=SystemClock.elapsedRealtime()+250;
@@ -655,6 +683,7 @@ public final class CaptureService extends Service {
     }
     /** Recovery without deleting already observed cards and training records. */
     private void forceRescan(){
+        setScanStatus("quét lại");
         synchronized(stateLock){
             recentCards.clear();
             handPending="";handPendingFrames=0;
@@ -735,8 +764,8 @@ public final class CaptureService extends Service {
         bottom.addView(otherRow);
         remainingRow=newCardText(10f);
         bottom.addView(remainingRow);
-        status=newCaption("");
-        bottom.addView(status);
+        // Scanner status has its own tiny badge beside the Suggest button.
+        // Do not add scan text or an extra background to the local card HUD.
         panels[3]=bottom;
 
         android.util.DisplayMetrics metrics=new android.util.DisplayMetrics();
@@ -759,6 +788,7 @@ public final class CaptureService extends Service {
         }
         createResetButton();
         createSuggestControls();
+        createScanBadge();
         refresh();
     }
     /** The top-left reset control is its own tiny touch target; HUD remains pass-through. */
@@ -835,6 +865,40 @@ public final class CaptureService extends Service {
         wm.addView(suggestionPanel,suggestionPanelParams);
         placeSuggestionControls();
         wm.updateViewLayout(suggestionPanel,suggestionPanelParams);
+    }
+    /** Tiny diagnostic, above the table, next to Gợi ý; touch passes through. */
+    private void createScanBadge(){
+        scanBadge=new TextView(this);
+        scanBadge.setText("Quét: chờ");
+        scanBadge.setGravity(Gravity.CENTER_VERTICAL);
+        scanBadge.setTextColor(0xfff5f8ef);
+        scanBadge.setTextSize(11f);
+        scanBadge.setTypeface(Typeface.DEFAULT,Typeface.BOLD);
+        scanBadge.setPadding(dp(4),0,dp(4),0);
+        // No rounded panel/border: just one short, legible line.
+        scanBadge.setBackgroundColor(0x44212b35);
+        scanBadge.setSingleLine(true);
+        scanBadge.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        scanBadgeParams=new WindowManager.LayoutParams(dp(136),dp(29),
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE |
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE |
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL |
+                WindowManager.LayoutParams.FLAG_SECURE,
+            PixelFormat.TRANSLUCENT);
+        scanBadgeParams.gravity=Gravity.TOP|Gravity.LEFT;
+        scanBadgeParams.alpha=.72f;
+        placeScanBadge();
+        wm.addView(scanBadge,scanBadgeParams);
+    }
+    private void placeScanBadge(){
+        if(scanBadgeParams!=null){scanBadgeParams.x=dp(118);scanBadgeParams.y=dp(12);}
+    }
+    private void setScanStatus(String value){
+        scanDiagnosis=value;
+        if(scanBadge!=null){
+            mainHandler.post(()->{if(scanBadge!=null)scanBadge.setText("Quét: "+value);});
+        }
     }
     /** User request starts a new read of hand, live board and count history.
      * No stored text from an earlier table position is used for advice.
@@ -942,16 +1006,17 @@ public final class CaptureService extends Service {
         });
     }
     private void showPendingAdvice(String message){
-        if(suggestionPanel==null||suggestionText==null)return;
-        if(dismissSuggestion!=null)mainHandler.removeCallbacks(dismissSuggestion);
-        suggestionText.setText(message);
-        suggestionText.setTextColor(0xffffffff);
-        // Avoid overlapping multiple semi-transparent HUD windows over local cards.
-        if(panels[3]!=null)panels[3].setVisibility(View.GONE);
-        suggestionPanel.setVisibility(View.VISIBLE);
+        // Never put the scanner placeholder over cards, opponents or controls.
+        setScanStatus("đang xử lý");
     }
     private void showAdvice(MonteCarloAdvisor.Advice advice){
         if(suggestionPanel==null||suggestionText==null)return;
+        if(advice.title.startsWith("QUÉT LẠI")){
+            setScanStatus("thiếu bài / lịch sử");
+            if(suggestionPanel!=null)suggestionPanel.setVisibility(View.GONE);
+            return;
+        }
+        setScanStatus("đã xử lý");
         String displayed=advice.title+(advice.detail.isEmpty()?"":"\n"+advice.detail);
         SpannableStringBuilder highlight=new SpannableStringBuilder(displayed);
         int warningStart=displayed.indexOf("⚠ HEO");
@@ -988,10 +1053,9 @@ public final class CaptureService extends Service {
             suggestionPanelParams.width=landscape?
                 Math.max(dp(165),Math.min(dp(360),(int)(screen*.37f))):
                 Math.max(dp(165),(int)(screen*.8f));
-            // During rescan show status by the LOCAL HAND, never over left player history.
-            suggestionPanelParams.x=landscape?(int)(screen*.30f):(int)(screen*.08f);
-            suggestionPanelParams.y=landscape?(int)(dm2.heightPixels*.55f):
-                (int)(dm2.heightPixels*.70f);
+            // Advice (not scan state) uses small top-left overlay, well clear of hand.
+            suggestionPanelParams.x=landscape?dp(258):dp(6);
+            suggestionPanelParams.y=landscape?dp(8):dp(55);
         }
     }
     private void placeResetButton(){
@@ -1011,13 +1075,14 @@ public final class CaptureService extends Service {
         placeSuggestionControls();
         if(suggestButton!=null&&suggestButtonParams!=null)try{wm.updateViewLayout(suggestButton,suggestButtonParams);}catch(Exception ignored){}
         if(suggestionPanel!=null&&suggestionPanelParams!=null)try{wm.updateViewLayout(suggestionPanel,suggestionPanelParams);}catch(Exception ignored){}
+        placeScanBadge();
+        if(scanBadge!=null&&scanBadgeParams!=null)try{wm.updateViewLayout(scanBadge,scanBadgeParams);}catch(Exception ignored){}
     }
     private void sizeOverlayFonts(int w,int h){
         float side=Math.min(w,h);
         for(int i=0;i<3;i++){
             if(playerRows[i]!=null)playerRows[i].setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(18f,side*.021f));
         }
-        if(status!=null)status.setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(13f,side*.015f));
         if(handRow!=null)handRow.setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(16f,side*.018f));
         if(otherRow!=null)otherRow.setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(16f,side*.018f));
         if(remainingRow!=null)remainingRow.setTextSize(TypedValue.COMPLEX_UNIT_PX,Math.max(17f,side*.019f));
@@ -1037,7 +1102,7 @@ public final class CaptureService extends Service {
             int minWidth=(i==3)?dp(114):dp(40);
             int needed;
             if(i<3)needed=desiredWidth(playerRows[i]);
-            else needed=Math.max(desiredWidth(remainingRow),Math.max(desiredWidth(handRow),Math.max(desiredWidth(otherRow),desiredWidth(status))));
+            else needed=Math.max(desiredWidth(remainingRow),Math.max(desiredWidth(handRow),desiredWidth(otherRow)));
             // The reset control occupies its own window, not HUD content.
             p.width=Math.min(maxWidth,Math.max(minWidth,needed+dp(20)));
             p.height=WindowManager.LayoutParams.WRAP_CONTENT;
@@ -1100,17 +1165,7 @@ public final class CaptureService extends Service {
             ArrayList<String> unknown=new ArrayList<>(remaining);
             unknown.removeAll(handCards);
             remainingRow.setText(buildRemainingSpans(remaining,unknown));
-            int missing=missingCards[0]+missingCards[1]+missingCards[2];
-            if(missing>0 || !waitingCards.isEmpty()){
-                StringBuilder info=new StringBuilder();
-                if(missing>0)info.append("Thiếu nhận diện: ").append(missing);
-                if(!waitingCards.isEmpty()){
-                    if(info.length()>0)info.append(" · ");
-                    info.append("Đang ghép: ").append(waitingCards.size());
-                }
-                status.setVisibility(View.VISIBLE);
-                status.setText(info.toString());
-            }else status.setVisibility(View.GONE);
+            // No scanner diagnostic row here: it crowds the fan and obscures play.
         }
         android.util.DisplayMetrics metrics=new android.util.DisplayMetrics();
         if(wm!=null){
@@ -1228,9 +1283,11 @@ public final class CaptureService extends Service {
         if(dismissSuggestion!=null)mainHandler.removeCallbacks(dismissSuggestion);
         if(wm!=null&&suggestButton!=null)try{wm.removeView(suggestButton);}catch(Exception ignored){}
         if(wm!=null&&suggestionPanel!=null)try{wm.removeView(suggestionPanel);}catch(Exception ignored){}
+        if(wm!=null&&scanBadge!=null)try{wm.removeView(scanBadge);}catch(Exception ignored){}
+        scanBadge=null;scanBadgeParams=null;
         suggestButton=null;suggestButtonParams=null; suggestionText=null;suggestionPanel=null;suggestionPanelParams=null;
         Arrays.fill(playerRows,null);
-        handRow=null;otherRow=null;remainingRow=null;status=null;
+        handRow=null;otherRow=null;remainingRow=null;
         super.onDestroy();
     }
     @Override public android.os.IBinder onBind(Intent i){return null;}

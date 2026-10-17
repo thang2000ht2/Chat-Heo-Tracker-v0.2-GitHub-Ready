@@ -7,3 +7,9 @@
 5. Giải nén artifact và cài `app-debug.apk` lên điện thoại.
 
 Lưu ý: ứng dụng chưa được biên dịch bằng Android SDK và thử trực tiếp trong môi trường tạo gói này. Nếu Actions báo đỏ, hãy gửi ảnh và đoạn lỗi gần dòng đầu tiên trong mục `Build debug APK`. Tránh đăng log có thông tin nhạy cảm.
+
+
+## Bản 1.8
+- Gói phát hành: `ChatHeoTracker-v1.8-scan-fix-compact-ai-apk`
+- Đã thêm TestHandFanGeometry / TestResidualHandQuality, xuất APK sau khi test thuần Java qua.
+- Đây vẫn là dự án nguồn chưa thử build Android trực tiếp trên Xiaomi.
