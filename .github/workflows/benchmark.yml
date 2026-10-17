@@ -1,0 +1,41 @@
+name: Benchmark actual Java advisor (research only)
+on:
+  workflow_dispatch:
+    inputs:
+      deals:
+        description: "Number of identical deals per opponent style (e.g. 20, 100, 300)"
+        required: true
+        default: '20'
+        type: string
+jobs:
+  reference-benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Compile actual production Java MonteCarloAdvisor bridge
+        run: |
+          mkdir -p build/benchclasses
+          javac -encoding UTF-8 -d build/benchclasses \
+            app/src/main/java/vn/chatheotracker/{MonteCarloAdvisor,StrategyMode,FinishPriority,ResidualHandQuality,OpeningTempoPolicy,OpponentBehaviorModel,ContextualHandSampler,PartialDeckState,RecentMoves,HeoWarningAdvisor,RiskReporting,AdvisorBenchmarkBridge}.java
+      - name: Paired benchmark (not verified Pig Hunters rules)
+        env:
+          DEALS: ${{ inputs.deals }}
+        run: |
+          python3 - <<'PY'
+          import os
+          value=int(os.environ['DEALS'])
+          if not 1<=value<=2000: raise SystemExit('deals must be 1..2000')
+          PY
+          python3 evaluation/selfplay_java_advisor.py --deals "$DEALS" --classes build/benchclasses --out build/java-paired-report
+      - name: Upload benchmark report (do not infer real-game win rates)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Java-Advisor-vs-Baselines-RESEARCH-ONLY
+          path: build/java-paired-report/
+          if-no-files-found: error
+
