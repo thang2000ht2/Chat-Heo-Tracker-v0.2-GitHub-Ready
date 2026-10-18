@@ -12,7 +12,7 @@ public final class TestOpponentCandidatePool {
         List<String> full=deck();
         OpponentCandidatePool.Result unknown=OpponentCandidatePool.analyze(full,Arrays.asList("8S"),false);
         ok(!unknown.reliable,"Unverified hand must not create confident warnings");
-        ok(unknown.cue("8S")==OpponentCandidatePool.Cue.UNVERIFIED,"Unverified card may not turn red/green");
+        ok(unknown.cue("8S")==OpponentCandidatePool.Cue.MINE,"Even when deck mismatch prevents warnings, a visually verified held card must stay dim");
         ok(unknown.quartets.isEmpty(),"Unverified hand produces no candidate sets");
         OpponentCandidatePool.Result one=OpponentCandidatePool.analyze(full,Arrays.asList("8S"),true);
         ok(one.reliable,"Verified hand");
