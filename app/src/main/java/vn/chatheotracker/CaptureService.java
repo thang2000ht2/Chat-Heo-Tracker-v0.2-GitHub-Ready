@@ -148,6 +148,8 @@ public final class CaptureService extends Service {
     private final int[] missingCards={0,0,0};
     private boolean sawAnyLowerCounter=false;
     private final RedealDetector redealDetector=new RedealDetector();
+    private final HandEndVisibility handEndVisibility=new HandEndVisibility();
+    private boolean resultLikeNoHand=false;
     private long ignoreCardsUntil=0L;
     private boolean stopping=false;
     private int densityDpi;
@@ -446,7 +448,9 @@ public final class CaptureService extends Service {
                 boolean occupantChanged=readSeats && handleSeatIdentities(seatNames,counts);
                 updateBoard(whiteCards);
                 changed=handleFrame(cards,counts,now) || occupantChanged;
-                if(myCards!=null){
+                // Seven full-count frames may be a new deal. Until the
+                // detector decides, keep the old hand/ledger immutable.
+                if(myCards!=null && !redealDetector.awaitingConfirmation()){
                     String frameSignature=myCards.fanCount+":"+myCards.cards+":"+myCards.complete+":"+myCards.diagnosis;
                     if(!frameSignature.equals(lastDiagnosticHand) || now-lastDiagnosticHandAt>12000){
                         diag("hand_scan","cards",myCards.cards,"slots",myCards.slots,
@@ -465,6 +469,19 @@ public final class CaptureService extends Service {
                     }
                     if(handleHandFrame(myCards))changed=true;
                     if(updateVisibleHand(myCards))changed=true;
+                    boolean ended=handEndVisibility.observe(
+                        myCards.complete && !myCards.cards.isEmpty(),knownCounts);
+                    if(ended!=resultLikeNoHand){
+                        resultLikeNoHand=ended;changed=true;
+                        if(ended){
+                            diag("hand_absent_after_winner","counts",knownCounts.clone(),
+                                "reason","no_visible_fan_eight_scans_not_confirmed_result");
+                            autoAdvicePending=false;suggestRequested=false;
+                            mainHandler.post(()->{
+                                if(suggestionPanel!=null)suggestionPanel.setVisibility(View.GONE);
+                            });
+                        }
+                    }
                 }
                 if(turnNow){
                     turnFrames++;absentTurnFrames=0;
@@ -523,7 +540,8 @@ public final class CaptureService extends Service {
                 lastScanBadgeUpdate=now;
                 String state;
                 synchronized(stateLock){
-                    if(!handCards.isEmpty()){
+                    if(resultLikeNoHand)state="chờ ván mới · giữ log";
+                    else if(!handCards.isEmpty()){
                         PartialDeckState.Result check=PartialDeckState.check(
                             handCards,observedCards(),knownCounts);
                         if(check.exact)state=handCards.size()+" lá ✓";
@@ -564,7 +582,7 @@ public final class CaptureService extends Service {
                 if(dismissSuggestion!=null)mainHandler.removeCallbacks(dismissSuggestion);
                 if(suggestionPanel!=null)suggestionPanel.setVisibility(View.GONE);
             });
-            if(trySuggestion)runFreshAdvice();
+            if(trySuggestion && !resultLikeNoHand)runFreshAdvice();
         }catch(Exception e){
             diag("frame_exception","exception_type",e.getClass().getSimpleName());
             android.util.Log.w("Tracker","Frame scan error",e);
@@ -662,6 +680,7 @@ public final class CaptureService extends Service {
             !myPlayed.isEmpty() || !waitingCards.isEmpty() ||
             !cardMoves.isEmpty() || !countDrops.isEmpty();
         if(redealDetector.observe(counts,playedBefore)){
+            diag("redeal_evidence","counts",counts.clone(),"reason","stable_counter_cycle");
             resetRoundInternal("confirmed_redeal");
             for(int i=0;i<3;i++){
                 knownCounts[i]=13;lastCandidates[i]=13;candidateFrames[i]=2;
@@ -670,7 +689,7 @@ public final class CaptureService extends Service {
             setScanStatus("ván mới · đang quét");
             return true;
         }
-        if(now<ignoreCardsUntil){
+        if(now<ignoreCardsUntil || redealDetector.awaitingConfirmation()){
             recentCards.clear();
             return changed;
         }
@@ -888,6 +907,7 @@ public final class CaptureService extends Service {
         Arrays.fill(knownCounts,-1);Arrays.fill(lastCandidates,-1);
         Arrays.fill(candidateFrames,0);Arrays.fill(missingCards,0);
         recentCards.clear();sawAnyLowerCounter=false;
+        resultLikeNoHand=false;handEndVisibility.clear();
         baitSignals.resetRound();adviceReentry.reset();adviceRetryGate.reset();
         confirmedPassLeadCleared="";lastLoggedThreatSignature="";
         threatEpoch++;lastThreatScan=0;threatDirty=true;
@@ -1243,6 +1263,33 @@ public final class CaptureService extends Service {
         if(handCards.isEmpty() && !HandSyncPolicy.acceptFirstVisualHand(scanned.size(),
             sawAnyLowerCounter || !played.isEmpty() || !myPlayed.isEmpty() || !cardMoves.isEmpty(),
             knownCounts))return false;
+        // The local player may open with a straight while all opponents still
+        // display 13. Our PREVIOUS verified hand and the actual public cards
+        // jointly prove that those missing cards were OUR play. Never attribute
+        // an unverified hand-size change to a player just from an OCR gap.
+        List<String> localCards=LocalPlayEvidence.confirmed(handCards,scanned,observedCards());
+        if(localCards.isEmpty() && handCards.isEmpty() && !handEverVerified &&
+                boardStable && played.isEmpty() && countDrops.isEmpty()){
+            localCards=LocalPlayEvidence.opening(scanned,currentBoard,knownCounts);
+        }
+        if(!localCards.isEmpty()){
+            for(String c:localCards){
+                played.add(c);myPlayed.add(c);
+                waitingCards.remove(c);otherPlayed.remove(c);otherHistory.remove(c);
+                for(int seat=0;seat<3;seat++){
+                    byPlayer[seat].remove(c);playerHistory[seat].remove(c);
+                    if(learning[seat].retractCurrentRound(Collections.singleton(c))>0)
+                        persistOpponentLearning(seat);
+                }
+            }
+            for(int i=cardMoves.size()-1;i>=0;i--){
+                cardMoves.get(i).cards.removeAll(localCards);
+                if(cardMoves.get(i).cards.isEmpty())cardMoves.remove(i);
+            }
+            diag("local_move_inferred","cards",localCards,"reason","verified_fan_and_board");
+            trainEvent("local_play_observed","cards",localCards,
+                "confidence","verified_fan_shrink_and_public_cards");
+        }
         // Three identical, complete visible fan scans outweigh a stale card
         // record. A card cannot be simultaneously in our hand and played.
         // Repair only the overlapping card identities; never fabricate others.
@@ -1550,7 +1597,10 @@ public final class CaptureService extends Service {
                 }
                 if(p!=null)p.setVisibility(n>0||!threatLabels[i].isEmpty()?View.VISIBLE:View.GONE);
             }
-            if(handCards.isEmpty())handRow.setVisibility(View.GONE);
+            if(resultLikeNoHand){
+                handRow.setVisibility(View.VISIBLE);
+                handRow.setText("Tôi: không thấy bài · chờ ván mới (chưa xác nhận kết quả)");
+            }else if(handCards.isEmpty())handRow.setVisibility(View.GONE);
             else{
                 handRow.setVisibility(View.VISIBLE);
                 // Compact grouped rank display: 6♠♥ instead of 6♠ 6♥.
@@ -1578,7 +1628,9 @@ public final class CaptureService extends Service {
                 ObservedHandReconciler.inspect(handCards,observedCards(),knownCounts).feasible;
             OpponentCandidatePool.Result pool=OpponentCandidatePool.analyze(
                 remaining,handCards,cleanVisualHand,knownCounts);
-            remainingRow.setText(buildRemainingSpans(remaining,pool));
+            remainingRow.setText(resultLikeNoHand?
+                "Chưa đánh: tạm dừng đối soát khi không thấy bài · giữ lịch sử để xuất log":
+                buildRemainingSpans(remaining,pool));
             // No scanner diagnostic row here: it crowds the fan and obscures play.
         }
         android.util.DisplayMetrics metrics=new android.util.DisplayMetrics();

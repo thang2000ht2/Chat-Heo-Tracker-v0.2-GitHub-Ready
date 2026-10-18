@@ -6,8 +6,8 @@ android {
         applicationId 'vn.chatheotracker'
         minSdk 29
         targetSdk 35
-        versionCode 29
-        versionName '2.9-hand-sync-atomic-moves-logs' 
+        versionCode 30
+        versionName '3.0-redeal-counter-cycle-local-play' 
     }
     buildTypes { release { minifyEnabled false } }
     compileOptions {
