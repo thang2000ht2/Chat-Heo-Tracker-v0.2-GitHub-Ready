@@ -1,0 +1,5 @@
+# Privacy-masked real screenshot crops; NOT frames from one uninterrupted round.
+elapsed_ms,filename
+1000,real_nine_local.png
+1220,real_nine_local.png
+1500,real_2h_active_jd_gray.png
