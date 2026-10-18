@@ -32,6 +32,11 @@ final class PlayBatchMatcher {
     static Match exact(List<Fragment> moves,List<Drop> drops,
                        Collection<String> liveBoard,boolean boardStable,long now){
         if(moves==null||drops==null)return null;
+        // Never attribute a card while the active layer is still animating.
+        // In an October 18 real capture, 2H was assigned against a visible
+        // 2C lead precisely because boardStable was false and the old
+        // conditional check was skipped.
+        if(!boardStable||liveBoard==null||liveBoard.isEmpty())return null;
         // Ignore invalid counter decreases. A stable WHITE play is positive
         // evidence; it may be a SUBSET of a full play when a card was occluded.
         // Require matched cards to contain all visible white cards, not the
@@ -51,8 +56,7 @@ final class PlayBatchMatcher {
                     union.addAll(f.cards);chosen.add(j);
                     if(union.size()>d.delta)break;
                     if(union.size()==d.delta){
-                        if(boardStable && liveBoard!=null && !liveBoard.isEmpty()
-                                && !union.containsAll(liveBoard))continue;
+                        if(!union.containsAll(liveBoard))continue;
                         return new Match(di,chosen,union);
                     }
                 }

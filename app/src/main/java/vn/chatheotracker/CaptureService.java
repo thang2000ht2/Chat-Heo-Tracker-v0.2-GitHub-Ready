@@ -156,6 +156,8 @@ public final class CaptureService extends Service {
     private TrainingDataStore trainingData;
     private DiagnosticLog diagnostics;
     private String lastDiagnosticHand="";
+    private String lastBoardLayerSignature="";
+    private long lastBoardLayerAt=0;
     private long lastDiagnosticHandAt=0;
     private String roundId;
     private String lastPartialLogged="";
@@ -446,8 +448,21 @@ public final class CaptureService extends Service {
             boolean changed,trySuggestion=false,turnBegan=false,turnEnded=false;
             synchronized(stateLock){
                 boolean occupantChanged=readSeats && handleSeatIdentities(seatNames,counts);
+                // Only the bright ACTIVE layer can add played-card evidence.
+                // The combined detector also sees old gray cards; logging those
+                // as new moves caused 2H to be credited while 2C was on top.
                 updateBoard(whiteCards);
-                changed=handleFrame(cards,counts,now) || occupantChanged;
+                LinkedHashSet<String> historicalLayer=new LinkedHashSet<>(cards);
+                historicalLayer.removeAll(whiteCards);
+                if(!historicalLayer.isEmpty()){
+                    String layerKey=historicalLayer.toString()+"|"+whiteCards;
+                    if(!layerKey.equals(lastBoardLayerSignature)||now-lastBoardLayerAt>12000){
+                        diag("board_layers_filtered","historical_only",new ArrayList<>(historicalLayer),
+                            "active_white",whiteCards,"counts",knownCounts.clone());
+                        lastBoardLayerSignature=layerKey;lastBoardLayerAt=now;
+                    }
+                }
+                changed=handleFrame(new ArrayList<>(ActiveBoardEvidence.active(cards,whiteCards)),counts,now) || occupantChanged;
                 // Seven full-count frames may be a new deal. Until the
                 // detector decides, keep the old hand/ledger immutable.
                 if(myCards!=null && !redealDetector.awaitingConfirmation()){
@@ -657,14 +672,17 @@ public final class CaptureService extends Service {
             if(count==0 && (knownCounts[i]<1 || knownCounts[i]>3))continue;
             if(lastCandidates[i]==count)candidateFrames[i]++;
             else {lastCandidates[i]=count;candidateFrames[i]=1;}
-            if(candidateFrames[i]<2 || knownCounts[i]==count)continue;
+            // A false winner badge can oscillate 2 -> 0 -> 2 in ~400 ms.
+            // Require more real frames before accepting a terminal zero.
+            if(candidateFrames[i]<CounterStabilityGate.requiredFrames(knownCounts[i],count)
+                    || knownCounts[i]==count)continue;
             int before=knownCounts[i];
             knownCounts[i]=count;
             if(before!=count){
                 changed=true;
                 diag("opponent_count","seat",i,"before",before,"after",count);
                 trainEvent("opponent_count","seat",i,"before",before,"after",count,
-                    "confidence","stable_two_frames");
+                    "confidence",count==0?"stable_four_frames":"stable_multiple_frames");
             }
             if(before>count){
                 countDrops.add(new CountDrop(i,before-count,now));
