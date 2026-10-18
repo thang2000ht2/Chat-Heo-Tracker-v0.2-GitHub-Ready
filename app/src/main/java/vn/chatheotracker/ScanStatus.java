@@ -9,6 +9,8 @@ final class ScanStatus {
         if(s.matches("\\d+ lá \u00b7 thiếu lịch sử \\d+"))
             return s.replace("thiếu lịch sử ","thiếu ");
         if(s.contains("thiếu bài / lịch sử"))return "lệch bài/LS";
+        if(s.contains("mở game / kiểm tra ghi màn hình"))return "mở game / quyền";
+        if(s.contains("chờ game · thử kết nối lại"))return "chờ game / nối lại";
         if(s.contains("đang xử lý"))return "đang tính";
         if(s.contains("đã nhận hình"))return "có hình";
         if(s.contains("lỗi khung hình"))return "lỗi hình";

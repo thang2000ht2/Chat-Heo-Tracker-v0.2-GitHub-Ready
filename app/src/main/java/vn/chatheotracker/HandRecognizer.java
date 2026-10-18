@@ -39,13 +39,19 @@ final class HandRecognizer {
         final String diagnosis;
         final List<String> slots;
         final int fanCount, fanStart;
+        final List<Double> slotScores;
         Result(List<String> cards, boolean complete){this(cards,complete,complete?"OK":"CHƯA RÕ");}
         Result(List<String> cards, boolean complete,String diagnosis){
             this(cards,complete,diagnosis,Collections.emptyList(),0,-1);
         }
         Result(List<String> cards, boolean complete,String diagnosis,List<String> slots,int count,int start){
+            this(cards,complete,diagnosis,slots,count,start,Collections.emptyList());
+        }
+        Result(List<String> cards,boolean complete,String diagnosis,List<String> slots,
+               int count,int start,List<Double> scorePerSlot){
             this.cards=cards;this.complete=complete;this.diagnosis=diagnosis;
             this.slots=slots;this.fanCount=count;this.fanStart=start;
+            this.slotScores=scorePerSlot;
         }
     }
     /** Full initial hand and later short hands share a single geometry search.
@@ -106,9 +112,11 @@ final class HandRecognizer {
                 int top=best.row-5+dy;
                 ArrayList<String> visible=new ArrayList<>();
                 ArrayList<String> slots=new ArrayList<>();
+                ArrayList<Double> slotScores=new ArrayList<>();
                 String failure="KHÔNG ĐỌC RÕ GÓC BÀI";
                 for(int i=0;i<best.count;i++){
                     String card=null;
+                    double cardScore=0;
                     int x=x0+(int)Math.round(i*94.6);
                     boolean[][] rank=extract(b,x+9,top+11,x+73,top+67,32,40,true);
                     boolean[][] suit=extract(b,x+8,top+71,x+69,top+129,28,28,false);
@@ -117,16 +125,19 @@ final class HandRecognizer {
                         Match r=classify(rank,rankTemplates),st=classify(suit,suitTemplates);
                         if(r.score>=.79 && r.margin>=.022 && st.score>=.84 && st.margin>=.014){
                             String candidate=r.label+st.label;
-                            if(!visible.contains(candidate)){card=candidate;visible.add(card);}
+                            if(!visible.contains(candidate)){
+                                card=candidate;cardScore=Math.min(r.score,st.score);
+                                visible.add(card);
+                            }
                             else failure="BÀI TRÙNG – QUÉT LẠI";
                         }else failure="MẶT BÀI CHƯA RÕ";
                     }
-                    slots.add(card);
+                    slots.add(card);slotScores.add(cardScore);
                 }
                 if(visible.size()==best.count)
-                    return new Result(visible,true,"OK",slots,best.count,best.left);
+                    return new Result(visible,true,"OK",slots,best.count,best.left,slotScores);
                 if(visible.size()>partial.cards.size())
-                    partial=new Result(visible,false,failure,slots,best.count,best.left);
+                    partial=new Result(visible,false,failure,slots,best.count,best.left,slotScores);
             }
         }
         // The global y-offset is not enough when individual cards are selected
@@ -179,6 +190,7 @@ final class HandRecognizer {
     private Result recognizeRaisedCorners(Bitmap b,HandFanGeometry.Fan fan){
         if(fan==null || fan.count<=0)return new Result(Collections.emptyList(),false,"KHÔNG THẤY QUẠT");
         ArrayList<String> visible=new ArrayList<>(),slots=new ArrayList<>();
+        ArrayList<Double> slotScores=new ArrayList<>();
         for(int i=0;i<fan.count;i++){
             int x=fan.left-3+(int)Math.round(i*94.6);
             int whiteTop=firstWhiteTop(b,x);
@@ -202,12 +214,12 @@ final class HandRecognizer {
                 }
             }
             if(bestCard!=null && visible.contains(bestCard))bestCard=null;
-            slots.add(bestCard);
+            slots.add(bestCard);slotScores.add(bestCard==null?0:Math.sqrt(bestScore));
             if(bestCard!=null)visible.add(bestCard);
         }
         return new Result(visible,visible.size()==fan.count,
             visible.size()==fan.count?"GÓC BÀI LINH HOẠT":"GÓC "+visible.size()+"/"+fan.count,
-            slots,fan.count,fan.left);
+            slots,fan.count,fan.left,slotScores);
     }
     private static boolean ink(int a) {
         int r=Color.red(a),g=Color.green(a),b=Color.blue(a);

@@ -32,7 +32,7 @@ public final class MainActivity extends Activity {
         root.setPadding(36, 64, 36, 20); root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(Color.rgb(20,22,29));
         TextView title = text("CHẶT HEO TRACKER",24,Color.WHITE); root.addView(title);
-        root.addView(text("v3.0 • chống reset lặp / nhận bài tay và báo màn kết quả",15,0xffd0d0d0));
+        root.addView(text("v3.4 • lọc bộ đếm mơ hồ / ghép bằng chứng thống nhất",15,0xffd0d0d0));
         state=text("Chưa theo dõi",16,0xffa5e8a3);root.addView(state);
         Button overlay = button("1. Cho phép cửa sổ nổi", () -> {
             Intent i = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
@@ -187,6 +187,16 @@ public final class MainActivity extends Activity {
                 LinearLayout.LayoutParams.WRAP_CONTENT,1));
         }
         root.addView(placements);
+        root.addView(text("TỰ KIỂM TRA NHẬN DIỆN",17,Color.WHITE));
+        root.addView(text("counter_ocr ghi ứng viên, điểm tốt nhất, điểm nhì và độ chênh. Điểm khớp mẫu KHÔNG phải phần trăm xác suất đúng. '?' là chưa đọc. Dữ liệu bài tay hiển thị điểm thấp hơn giữa số và chất của mỗi lá.",13,0xffbac4d2));
+        android.content.SharedPreferences checks=getSharedPreferences("tracker_scan_selfcheck",MODE_PRIVATE);
+        TextView counterReport=text(checks.getString("counters","Chưa có dữ liệu bộ đếm"),13,0xffa5e8a3);
+        TextView handReport=text(checks.getString("hand","Chưa có kết quả bài tay"),13,0xffa5e8a3);
+        root.addView(counterReport);root.addView(handReport);
+        root.addView(button("Làm mới bảng tự kiểm tra",()->{
+            counterReport.setText(checks.getString("counters","Chưa có dữ liệu bộ đếm"));
+            handReport.setText(checks.getString("hand","Chưa có kết quả bài tay"));
+        }));
         root.addView(text("NHẬT KÝ CHẨN ĐOÁN LỖI QUÉT",17,Color.WHITE));
         root.addView(text("Log tự lưu OFFLINE, không lưu ảnh màn hình, nickname hay tên người chơi. Ghi nhận kết quả quét, bộ đếm, các mảnh lượt đánh, cách ghép người đánh và những xung đột bài tay. Khi gặp lỗi, xuất log ngay sau ván rồi gửi cùng ảnh để kiểm tra. Lưu tối đa khoảng 3 MB, không liên quan tùy chọn huấn luyện AI.",13,0xffbac4d2));
         root.addView(text("Dung lượng log lỗi: "+(new DiagnosticLog(getFilesDir()).bytes()/1024)+" KB",13,0xffa5e8a3));
@@ -269,6 +279,10 @@ public final class MainActivity extends Activity {
         it.putExtra(CaptureService.EXTRA_RESULT,result);
         it.putExtra(CaptureService.EXTRA_DATA,data);
         if(Build.VERSION.SDK_INT>=26)startForegroundService(it);else startService(it);
-        state.setText("Đang khởi động. Hãy quay lại game.");
+        state.setText("Đang khởi động. Tracker tự thu nhỏ để bạn quay lại game.");
+        // After MediaProjection consent Android often foregrounds the Tracker
+        // activity, causing the first capture to scan our settings screen.
+        // Move this task out of the way; leave the foreground capture service up.
+        getWindow().getDecorView().postDelayed(() -> moveTaskToBack(true), 450);
     }
 }

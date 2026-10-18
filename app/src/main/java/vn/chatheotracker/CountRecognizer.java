@@ -11,8 +11,8 @@ import java.util.List;
 
 /** Reads the visible card-back counters. P1 = top, P2 = left, P3 = right.
  * Coordinates are normalized to the same 2048 x 942 game layout as CardRecognizer.
- * White digit templates for 0,1,2,3,4,5,7,9 were extracted from the user's video.
- * Templates 6/8 are approximate and have not been validated against this game's glyphs.
+ * Digit 6/8 templates have now been extracted from user-labeled real screenshots.
+ * Scores are template similarity, never calibrated probabilities.
  */
 final class CountRecognizer {
     static final int REF_W=2048, REF_H=942;
@@ -30,14 +30,21 @@ final class CountRecognizer {
             }catch(Exception ignored){}
         }
     }
-    int[] read(Bitmap frame){
+    static final class Details {
+        final int[] counts={-1,-1,-1};
+        final double[] best={0,0,0},runner={0,0,0},margin={0,0,0};
+        final String[] reasons={"unread","unread","unread"};
+        final int[] secondDigits={-1,-1,-1};
+    }
+    int[] read(Bitmap frame){return readDetailed(frame).counts;}
+    Details readDetailed(Bitmap frame){
         Bitmap ref=frame;
         if(frame.getWidth()!=REF_W || frame.getHeight()!=REF_H)
             ref=Bitmap.createScaledBitmap(frame,REF_W,REF_H,false);
         try {
-            int[] counts=new int[3];
-            for(int i=0;i<3;i++)counts[i]=readAt(ref,CX[i],CY[i]);
-            return counts;
+            Details output=new Details();
+            for(int i=0;i<3;i++)readAt(ref,CX[i],CY[i],output,i);
+            return output;
         }finally {if(ref!=frame)ref.recycle();}
     }
     private static boolean white(int c){
@@ -45,17 +52,19 @@ final class CountRecognizer {
         int low=Math.min(r,Math.min(g,b)), high=Math.max(r,Math.max(g,b));
         return low>185 && high-low<70;
     }
-    private int readAt(Bitmap bmp,int x,int y){
-        // If a player goes out, this game removes that player's orange card-back.
-        // Return 0 only as a visual 'badge missing' signal; the service will
-        // accept it only after a previously readable count of <= 3.
+    private void readAt(Bitmap bmp,int x,int y,Details result,int seat){
+        // Some player card-backs disappear at finish or during spectator mode.
+        // Absence does not prove zero cards: do not turn it into a move.
         int orange=0;
         for(int yy=y-50;yy<y+50;yy+=2)for(int xx=x-38;xx<x+38;xx+=2){
             int c=bmp.getPixel(xx,yy);
             int r=Color.red(c),g=Color.green(c),b=Color.blue(c);
             if(r>135 && g>60 && g<210 && b<110 && r>g*1.15)orange++;
         }
-        if(orange<175)return 0;
+        if(orange<175){
+            result.reasons[seat]="badge_absent";
+            return; // Absence is NOT proof of a player having zero cards.
+        }
         final int width=59,height=33;
         boolean[][] mask=new boolean[height][width],seen=new boolean[height][width];
         for(int j=0;j<height;j++)for(int i=0;i<width;i++)
@@ -83,41 +92,24 @@ final class CountRecognizer {
             for(int j=0;j<gh;j++)for(int i=0;i<gw;i++)part[j][i]=mask[y1+j][x1+i];
             glyphs.add(new Glyph(x1,part));
         }
-        if(glyphs.size()<1||glyphs.size()>2)return -1;
+        if(glyphs.size()<1||glyphs.size()>2){
+            result.reasons[seat]="glyph_count_"+glyphs.size();return;
+        }
         glyphs.sort((a,b)->Integer.compare(a.x,b.x));
         int number=0;
         for(Glyph glyph:glyphs){
-            int bestDigit=-1;double bestScore=0;
-            for(int d=0;d<10;d++){
-                if(templates[d]==null)continue;
-                double score=score(glyph.pixels,templates[d]);
-                if(score>bestScore){bestScore=score;bestDigit=d;}
+            DigitTemplateScorer.Ranked ranked=DigitTemplateScorer.rank(glyph.pixels,templates);
+            // Conservative combination for two-digit (10..13) counters.
+            if(result.best[seat]==0 || ranked.first<result.best[seat]){
+                result.best[seat]=ranked.first;result.runner[seat]=ranked.second;
+                result.margin[seat]=ranked.margin;result.secondDigits[seat]=ranked.runnerUp;
             }
-            // Deliberately leave uncertain counters unread instead of inventing a turn.
-            if(bestDigit<0||bestScore<0.65)return -1;
-            number=number*10+bestDigit;
+            if(!ranked.accepted){result.reasons[seat]=ranked.reason;return;}
+            number=number*10+ranked.winner;
         }
-        return number>=1 && number<=13 ? number : -1;
-    }
-    private static double score(boolean[][] shape,boolean[][] template){
-        final int w=20,h=26;
-        boolean[][] a=resize(shape,w,h),b=resize(template,w,h);
-        int one=0,two=0,both=0;
-        for(int y=0;y<h;y++)for(int x=0;x<w;x++){
-            if(a[y][x])one++;
-            if(b[y][x])two++;
-            if(a[y][x]&&b[y][x])both++;
-        }
-        double ratioA=(double)shape[0].length/shape.length;
-        double ratioB=(double)template[0].length/template.length;
-        return 2.0*both/Math.max(1,one+two)-0.17*Math.abs(ratioA-ratioB);
-    }
-    private static boolean[][] resize(boolean[][] src,int w,int h){
-        boolean[][] out=new boolean[h][w];
-        int H=src.length,W=src[0].length;
-        for(int y=0;y<h;y++)for(int x=0;x<w;x++)
-            out[y][x]=src[Math.min(H-1,y*H/h)][Math.min(W-1,x*W/w)];
-        return out;
+        if(number>=1 && number<=13){
+            result.counts[seat]=number;result.reasons[seat]="ok";
+        }else result.reasons[seat]="out_of_range";
     }
     private static class Glyph {
         final int x;final boolean[][] pixels;

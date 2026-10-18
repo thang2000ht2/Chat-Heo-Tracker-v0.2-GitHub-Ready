@@ -68,6 +68,10 @@ public final class CaptureService extends Service {
     private volatile long lastFrameArrived=0, lastFrameDecoded=0;
     private long lastRecoveryAttempt=0;
     private int scanFrameIndex=0;
+    private CaptureReadinessGate captureReadiness;
+    private boolean gameViewPromptLogged=false;
+    private boolean firstGameFrameLogged=false;
+    private long captureStartedAtElapsed=0;
     private final Runnable captureWatchdog=new Runnable(){
         @Override public void run(){
             if(stopping || projection==null || workerHandler==null)return;
@@ -85,6 +89,9 @@ public final class CaptureService extends Service {
     private Runnable dismissSuggestion;
     private CardRecognizer recognizer;
     private CountRecognizer countRecognizer;
+    private String lastCounterOcrSignature="";
+    private long lastCounterOcrLogAt=0;
+    private final int[] rejectedCounterObservations={0,0,0};
     private HandRecognizer handRecognizer;
     private final TemporalHandEvidence fusedHand=new TemporalHandEvidence();
     private final LinkedHashSet<String> handCards=new LinkedHashSet<>();
@@ -130,6 +137,9 @@ public final class CaptureService extends Service {
     // Each card is confirmed independently: an icon/chat box can temporarily hide
     // only part of a played combination, so whole-frame signatures are brittle.
     private final TemporalCardEvidence recentCards=new TemporalCardEvidence();
+    // General multi-signal evidence for any complete legal public move,
+    // not a hard-coded six-card/chop branch.
+    private final MoveEvidenceFusion moveEvidence=new MoveEvidenceFusion();
     private final LinkedHashSet<String> played=new LinkedHashSet<>();
     private final LinkedHashSet<String>[] byPlayer=new LinkedHashSet[]{new LinkedHashSet<>(),new LinkedHashSet<>(),new LinkedHashSet<>()};
     private final LinkedHashSet<String> otherPlayed=new LinkedHashSet<>();
@@ -158,6 +168,8 @@ public final class CaptureService extends Service {
     private String lastDiagnosticHand="";
     private String lastBoardLayerSignature="";
     private long lastBoardLayerAt=0;
+    private String lastEvidenceHypothesis="";
+    private long lastEvidenceHypothesisAt=0;
     private long lastDiagnosticHandAt=0;
     private String roundId;
     private String lastPartialLogged="";
@@ -364,6 +376,10 @@ public final class CaptureService extends Service {
         virtualDisplay=projection.createVirtualDisplay("LocalCardCapture",width,height,dm.densityDpi,
             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,imageReader.getSurface(),null,workerHandler);
         lastFrameArrived=SystemClock.elapsedRealtime();
+        captureReadiness=new CaptureReadinessGate(lastFrameArrived);
+        captureStartedAtElapsed=lastFrameArrived;
+        gameViewPromptLogged=false;
+        firstGameFrameLogged=false;
         mainHandler.postDelayed(captureWatchdog,3000);
     }
     private void resizeCapture(int width,int height){
@@ -422,7 +438,32 @@ public final class CaptureService extends Service {
             if(normalized!=cropped)cropped.recycle();
             List<String> cards=recognizer.recognize(normalized);
             List<String> whiteCards=recognizer.recognizeCurrentPlay(normalized);
-            int[] counts=countRecognizer.read(normalized);
+            CountRecognizer.Details countReading=countRecognizer.readDetailed(normalized);
+            int[] counts=countReading.counts;
+            if(scanFrameIndex%8==0){
+                String signature=java.util.Arrays.toString(countReading.counts)+
+                    java.util.Arrays.toString(countReading.reasons);
+                if(!signature.equals(lastCounterOcrSignature) || now-lastCounterOcrLogAt>12000){
+                    diag("counter_ocr","counts",countReading.counts.clone(),
+                        "ocr_best",countReading.best.clone(),
+                        "ocr_second",countReading.runner.clone(),
+                        "ocr_margin",countReading.margin.clone(),
+                        "ocr_reasons",countReading.reasons.clone(),
+                        "ocr_runner_digits",countReading.secondDigits.clone());
+                    lastCounterOcrSignature=signature;lastCounterOcrLogAt=now;
+                }
+                // Small bounded self-check snapshot for the Tracker settings screen.
+                StringBuilder counterText=new StringBuilder("Bộ đếm (Trên / Trái / Phải)\n");
+                for(int seat=0;seat<3;seat++){
+                    counterText.append(new String[]{"Trên","Trái","Phải"}[seat]);
+                    counterText.append(": ").append(counts[seat]<0?"?":counts[seat]);
+                    counterText.append(" · khớp=").append(Math.round(countReading.best[seat]*100));
+                    counterText.append(" · chênh=").append(Math.round(countReading.margin[seat]*100));
+                    counterText.append(" · ").append(countReading.reasons[seat]).append('\n');
+                }
+                getSharedPreferences("tracker_scan_selfcheck",MODE_PRIVATE).edit()
+                    .putString("counters",counterText.toString()).apply();
+            }
             boolean turnNow=LocalTurnDetector.isMyTurn(normalized);
             // Nicknames change rarely. Reading them every frame adds delay and OCR noise.
             boolean readSeats=scanFrameIndex%8==0;
@@ -443,6 +484,38 @@ public final class CaptureService extends Service {
             }
             normalized.recycle();
             lastFrameDecoded=SystemClock.elapsedRealtime();
+            boolean gameEvidence=!whiteCards.isEmpty() || !cards.isEmpty() ||
+                (myCards!=null && !myCards.cards.isEmpty());
+            if(!gameEvidence)for(int c:counts)if(c>=0)gameEvidence=true;
+            if(captureReadiness!=null){
+                CaptureReadinessGate.Status startup=captureReadiness.observe(gameEvidence,now);
+                if(startup==CaptureReadinessGate.Status.REBIND_ONCE){
+                    diag("capture_waiting_game","frame_index",scanFrameIndex,
+                        "reason","no_game_features_12_seconds");
+                    setScanStatus("chờ game · thử kết nối lại");
+                    // Defer until the acquired Image is closed in onImage.finally.
+                    // Closing an ImageReader while its frame is still acquired
+                    // may crash or stall the first MediaProjection session.
+                    workerHandler.post(this::rebindCaptureSurface);
+                }else if(startup==CaptureReadinessGate.Status.NEED_GAME_OR_PERMISSION){
+                    if(!gameViewPromptLogged){
+                        diag("capture_game_not_visible","frame_index",scanFrameIndex,
+                            "reason","decoded_frames_but_no_game_features");
+                        gameViewPromptLogged=true;
+                    }
+                    setScanStatus("mở game / kiểm tra ghi màn hình");
+                }else if(startup==CaptureReadinessGate.Status.GAME_VISIBLE){
+                    if(!firstGameFrameLogged){
+                        diag("capture_first_game_frame","frame_index",scanFrameIndex,
+                            "delay_ms",Math.max(0,now-captureStartedAtElapsed));
+                        firstGameFrameLogged=true;
+                    }
+                    if(gameViewPromptLogged){
+                        diag("capture_game_visible","frame_index",scanFrameIndex);
+                        gameViewPromptLogged=false;
+                    }
+                }
+            }
             // Recognition and reconciliation are separate checks. Readable card glyphs
             // must not be mistaken for a verified hand if the deck totals disagree.
             boolean changed,trySuggestion=false,turnBegan=false,turnEnded=false;
@@ -452,6 +525,8 @@ public final class CaptureService extends Service {
                 // The combined detector also sees old gray cards; logging those
                 // as new moves caused 2H to be credited while 2C was on top.
                 updateBoard(whiteCards);
+                if(now>=ignoreCardsUntil && !redealDetector.awaitingConfirmation())
+                    moveEvidence.observe(whiteCards,now);
                 LinkedHashSet<String> historicalLayer=new LinkedHashSet<>(cards);
                 historicalLayer.removeAll(whiteCards);
                 if(!historicalLayer.isEmpty()){
@@ -463,6 +538,13 @@ public final class CaptureService extends Service {
                     }
                 }
                 changed=handleFrame(new ArrayList<>(ActiveBoardEvidence.active(cards,whiteCards)),counts,now) || occupantChanged;
+                // Fuse active white-layer sightings across frames, verified counter
+                // changes, known local hand and recorded history. This supports
+                // any observable legal move, including 3/4 consecutive pairs.
+                // When the evidence is incomplete or attribution is ambiguous,
+                // abstain rather than invent unseen cards.
+                if(recoverVerifiedEvidenceMove(whiteCards,now))changed=true;
+                logPendingMoveHypotheses(whiteCards,now);
                 // Seven full-count frames may be a new deal. Until the
                 // detector decides, keep the old hand/ledger immutable.
                 if(myCards!=null && !redealDetector.awaitingConfirmation()){
@@ -473,6 +555,21 @@ public final class CaptureService extends Service {
                             "complete",myCards.complete,"diagnosis",myCards.diagnosis,
                             "counts",knownCounts.clone(),"frame_index",scanFrameIndex);
                         lastDiagnosticHand=frameSignature;lastDiagnosticHandAt=now;
+                    }
+                    if(scanFrameIndex%8==0){
+                        StringBuilder handText=new StringBuilder("Bài tay: ");
+                        handText.append(myCards.cards.size()).append('/')
+                            .append(myCards.fanCount).append(" · ")
+                            .append(myCards.diagnosis).append('\n');
+                        for(int slot=0;slot<myCards.slots.size();slot++){
+                            String token=myCards.slots.get(slot);
+                            if(slot>0)handText.append(" · ");
+                            handText.append(token==null?"?":token).append('(');
+                            handText.append(slot<myCards.slotScores.size()?Math.round(
+                                myCards.slotScores.get(slot)*100):0).append(')');
+                        }
+                        getSharedPreferences("tracker_scan_selfcheck",MODE_PRIVATE).edit()
+                            .putString("hand",handText.toString()).apply();
                     }
                     if(!myCards.complete && !myCards.cards.isEmpty()){
                         String sig=myCards.cards.size()+":"+myCards.diagnosis;
@@ -551,7 +648,8 @@ public final class CaptureService extends Service {
                     }
                 }
             }
-            if(now-lastScanBadgeUpdate>1400){
+            if(now-lastScanBadgeUpdate>1400 &&
+                (captureReadiness==null || captureReadiness.hasSeenGame())){
                 lastScanBadgeUpdate=now;
                 String state;
                 synchronized(stateLock){
@@ -666,14 +764,19 @@ public final class CaptureService extends Service {
         boolean changed=false;
         for(int i=0;i<3;i++){
             int count=counts[i];
-            if(count<0||count>13){lastCandidates[i]=-1;candidateFrames[i]=0;continue;}
-            // Winner counters can disappear at 0. Never interpret startup,
-            // covered badges or a missing low-quality OCR digit as a turn.
-            if(count==0 && (knownCounts[i]<1 || knownCounts[i]>3))continue;
+            if(count<1||count>13){lastCandidates[i]=-1;candidateFrames[i]=0;continue;}
+            String refusal=CounterTransitionPolicy.rejection(knownCounts[i],count);
+            if(refusal!=null){
+                if(++rejectedCounterObservations[i]==1 || rejectedCounterObservations[i]%12==0)
+                    diag("counter_rejected","seat",i,"before",knownCounts[i],
+                        "after",count,"reason",refusal);
+                lastCandidates[i]=-1;candidateFrames[i]=0;
+                continue;
+            }
+            rejectedCounterObservations[i]=0;
             if(lastCandidates[i]==count)candidateFrames[i]++;
             else {lastCandidates[i]=count;candidateFrames[i]=1;}
-            // A false winner badge can oscillate 2 -> 0 -> 2 in ~400 ms.
-            // Require more real frames before accepting a terminal zero.
+            // A missing or unreadable badge is UNKNOWN; never infer zero here.
             if(candidateFrames[i]<CounterStabilityGate.requiredFrames(knownCounts[i],count)
                     || knownCounts[i]==count)continue;
             int before=knownCounts[i];
@@ -735,55 +838,16 @@ public final class CaptureService extends Service {
     }
     private boolean reconcile(long now){
         boolean changed=false;
-        // Never assign an incomplete 8-9-10 fragment to a 5-card counter
-        // decrease. Wait for J-Q from later video frames and commit ONE move.
-        for(int iteration=0;iteration<8;iteration++){
-            ArrayList<PlayBatchMatcher.Fragment> fragments=new ArrayList<>();
-            for(CardMove move:cardMoves)
-                fragments.add(new PlayBatchMatcher.Fragment(move.cards,move.time,move.updated));
-            ArrayList<PlayBatchMatcher.Drop> drops=new ArrayList<>();
-            for(CountDrop drop:countDrops)
-                drops.add(new PlayBatchMatcher.Drop(drop.player,drop.delta,drop.time));
-            PlayBatchMatcher.Match match=PlayBatchMatcher.exact(fragments,drops,
-                currentBoard,boardStable,now);
-            if(match==null)break;
-            CountDrop drop=countDrops.remove(match.dropIndex);
-            ArrayList<String> accepted=new ArrayList<>();
-            for(String card:match.cards)if(played.add(card)){
-                byPlayer[drop.player].add(card);
-                accepted.add(card);
-            }
-            for(int k=match.fragments.size()-1;k>=0;k--)
-                cardMoves.remove((int)match.fragments.get(k));
-            waitingCards.removeAll(match.cards);
-            if(!accepted.isEmpty()){
-                playerHistory[drop.player].record(accepted);
-                BaitBehaviorSignals.Observation signal=baitSignals.record(drop.player,
-                    accepted,handEverVerified?handCards:null,knownCounts[drop.player]);
-                if(signal.possibleBaitSignal())trainEvent("bait_candidate","seat",drop.player,
-                    "cards",accepted,"signal",signal.label(),"my_heo_verified",true,
-                    "remaining_after",knownCounts[drop.player],
-                    "confidence","weak_observable_pattern_not_hidden_intent");
-                trainEvent("opponent_move","seat",drop.player,"cards",accepted,
-                    "count_decrease",drop.delta,"remaining_after",knownCounts[drop.player],
-                    "local_hand_count",handEverVerified?handCards.size():-1,
-                    "local_heo_visible",handEverVerified && hasHeo(handCards),
-                    "lead_previous_frame",new ArrayList<>(currentBoard),
-                    "lead_context_confidence","not_verified_same_turn",
-                    "opponent_counts",knownCounts.clone(),"confidence","matched_exact");
-                learning[drop.player].record(accepted);
-                persistOpponentLearning(drop.player);
-            }
-            diag("move_matched","seat",drop.player,"delta",drop.delta,
-                "fragments",match.fragments.size(),"cards",accepted,"board",currentBoard);
-            changed=true;
-        }
+        // Only MoveEvidenceFusion may CONFIRM opponent plays. The former
+        // PlayBatchMatcher path was a competing authority, sometimes choosing
+        // a plausible but different fragment order. The fusion runs immediately
+        // after handleFrame and uses actual WHITE layer + counter evidence.
         // Old code prematurely attributed 3/5 cards to a player (or to
         // 'Khác') and subsequently misattributed the other 2/5. Keep incomplete
         // batches uncertain instead of poisoning confirmed opponent history.
         for(int m=0;m<cardMoves.size();){
             CardMove move=cardMoves.get(m);
-            if(now-move.updated<4800){m++;continue;}
+            if(now-move.updated<14500){m++;continue;}
             boolean pendingCounter=false;
             for(CountDrop drop:countDrops)
                 if(Math.abs(drop.time-move.time)<3000){pendingCounter=true;break;}
@@ -804,7 +868,13 @@ public final class CaptureService extends Service {
         }
         for(int i=0;i<countDrops.size();){
             CountDrop drop=countDrops.get(i);
-            if(now-drop.time>6500){
+            if(now-drop.time>6500 && !drop.pendingLogged){
+                drop.pendingLogged=true;
+                diag("move_pending","seat",drop.player,"delta",drop.delta,
+                    "reason","awaiting_more_white_layer_or_counter_evidence",
+                    "counts",knownCounts.clone());
+            }
+            if(now-drop.time>18000){
                 trainEvent("missing_play","seat",drop.player,"count_decrease",drop.delta,
                     "confidence","unreadable_cards");
                 diag("incomplete_move","seat",drop.player,"delta",drop.delta,
@@ -815,6 +885,80 @@ public final class CaptureService extends Service {
         }
         return changed;
     }
+    /** General, evidence-based recovery for any legal move length. Do not
+     * infer card identity from count delta alone; use only observed active
+     * bright-layer identities and withhold ambiguous attributions.
+     */
+    private boolean recoverVerifiedEvidenceMove(Collection<String> activeWhite,long now){
+        if(countDrops.isEmpty() ||
+            ((activeWhite==null || activeWhite.isEmpty()) &&
+                !moveEvidence.hasRecentActive(now)))return false;
+        ArrayList<MoveEvidenceFusion.CounterChange> drops=new ArrayList<>();
+        for(CountDrop d:countDrops)
+            drops.add(new MoveEvidenceFusion.CounterChange(d.player,d.delta,d.time));
+        MoveEvidenceFusion.Outcome match=moveEvidence.match(drops,played,
+            handEverVerified?handCards:null,activeWhite,now);
+        if(match==null)return false;
+        CountDrop drop=countDrops.get(match.dropIndex);
+        if(drop.player!=match.seat || drop.delta!=match.delta ||
+                match.cards.size()!=drop.delta)return false;
+        for(String card:match.cards){
+            if(played.contains(card) || (handEverVerified && handCards.contains(card)))
+                return false;
+        }
+        countDrops.remove(match.dropIndex);
+        LinkedHashSet<String> accepted=new LinkedHashSet<>(match.cards);
+        played.addAll(accepted);
+        byPlayer[drop.player].addAll(accepted);
+        waitingCards.removeAll(accepted);
+        for(int j=cardMoves.size()-1;j>=0;j--){
+            CardMove fragment=cardMoves.get(j);
+            if(Math.abs(fragment.time-drop.time)<4300 &&
+                accepted.containsAll(fragment.cards))cardMoves.remove(j);
+        }
+        playerHistory[drop.player].record(accepted);
+        learning[drop.player].record(accepted);
+        persistOpponentLearning(drop.player);
+        trainEvent("opponent_move","seat",drop.player,
+            "cards",new ArrayList<>(accepted),"count_decrease",drop.delta,
+            "remaining_after",knownCounts[drop.player],"shape",match.shape,
+            "evidence",match.reason,"confidence","verified_multisignal_visible_cards");
+        diag("move_evidence_fused","seat",drop.player,"delta",drop.delta,
+            "shape",match.shape,"cards",new ArrayList<>(accepted),
+            "observations",match.observations,"source",match.reason);
+        threatDirty=true;
+        return true;
+    }
+
+    /** Incomplete observations are useful as tentative hypotheses, never
+     * ground-truth training labels. Keep these in diagnostic JSONL only.
+     */
+    private void logPendingMoveHypotheses(Collection<String> activeWhite,long now){
+        if(activeWhite==null || activeWhite.isEmpty() || countDrops.isEmpty())return;
+        for(CountDrop d:countDrops){
+            if(d.delta<=activeWhite.size() || d.delta<3 ||
+                Math.abs(now-d.time)>3500)continue;
+            HashSet<String> excluded=new HashSet<>(played);
+            if(handEverVerified)excluded.addAll(handCards);
+            List<MoveHypothesisAnalyzer.Hypothesis> possibilities=
+                MoveHypothesisAnalyzer.possible(d.delta,activeWhite,excluded);
+            if(possibilities.isEmpty())continue;
+            String fingerprint=d.player+"|"+d.delta+"|"+activeWhite+"|"+possibilities;
+            if(fingerprint.equals(lastEvidenceHypothesis) &&
+                    now-lastEvidenceHypothesisAt<7500)continue;
+            lastEvidenceHypothesis=fingerprint;lastEvidenceHypothesisAt=now;
+            ArrayList<String> shapes=new ArrayList<>();
+            for(MoveHypothesisAnalyzer.Hypothesis h:possibilities){
+                if(shapes.size()>=16)break;
+                shapes.add(h.toString());
+            }
+            diag("move_evidence_hypotheses","seat_candidate",d.player,
+                "count_delta",d.delta,"observed_white",new ArrayList<>(activeWhite),
+                "possible_patterns",shapes,"unlisted_more",Math.max(0,possibilities.size()-16),
+                "confidence","unconfirmed_missing_cards_not_in_training");
+        }
+    }
+
     /** Restore active profiles and the long-term archive; replacement never deletes evidence. */
     private void loadOpponentLearning(){
         android.content.SharedPreferences sp=getSharedPreferences("opponent_learning_v1",MODE_PRIVATE);
@@ -904,6 +1048,7 @@ public final class CaptureService extends Service {
         startNewRound(reason);
         lastPartialLogged="";lastPartialLoggedAt=0;
         lastDiagnosticHand="";lastDiagnosticHandAt=0;
+        lastEvidenceHypothesis="";lastEvidenceHypothesisAt=0;
         for(int i=0;i<3;i++){
             learning[i].newRound();
             persistOpponentLearning(i);
@@ -924,7 +1069,7 @@ public final class CaptureService extends Service {
         otherHistory.clear();
         Arrays.fill(knownCounts,-1);Arrays.fill(lastCandidates,-1);
         Arrays.fill(candidateFrames,0);Arrays.fill(missingCards,0);
-        recentCards.clear();sawAnyLowerCounter=false;
+        recentCards.clear();moveEvidence.clear();sawAnyLowerCounter=false;
         resultLikeNoHand=false;handEndVisibility.clear();
         baitSignals.resetRound();adviceReentry.reset();adviceRetryGate.reset();
         confirmedPassLeadCleared="";lastLoggedThreatSignature="";
@@ -955,7 +1100,7 @@ public final class CaptureService extends Service {
     private void forceRescan(){
         setScanStatus("quét lại");
         synchronized(stateLock){
-            recentCards.clear();
+            recentCards.clear();moveEvidence.clear();
             handPending="";handPendingFrames=0;fusedHand.clear();
             visualCandidate="";visualFrames=0;visualHandTrusted=false;
             boardCandidate="";boardFrames=0;boardStable=false;
@@ -980,6 +1125,7 @@ public final class CaptureService extends Service {
     }
     private static final class CountDrop {
         final int player,delta;final long time;
+        boolean pendingLogged=false;
         CountDrop(int id,int size,long timestamp){player=id;delta=size;time=timestamp;}
     }
     private int dp(float x){return (int)(x*getResources().getDisplayMetrics().density+0.5f);}

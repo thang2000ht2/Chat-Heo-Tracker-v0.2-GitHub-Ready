@@ -205,10 +205,12 @@ final class MonteCarloAdvisor {
      * Returns only a short play suggestion so it does not obstruct the game.
      * No advice is given when the 52-card conservation check fails.
      */
+    @Deprecated // Legacy research baseline, not the on-device recommendation path.
     static Advice adviseLowestBlockRisk(Collection<String> mine, Collection<String> table,
                                         Collection<String> seen, int[] counts){
         return adviseLowestBlockRisk(mine,table,seen,counts,StrategyMode.PLACEMENT);
     }
+    @Deprecated // Legacy research baseline, not the on-device recommendation path.
     static Advice adviseLowestBlockRisk(Collection<String> mine, Collection<String> table,
                                         Collection<String> seen, int[] counts,StrategyMode mode){
         if(mine==null || mine.isEmpty() || mine.size()>13 || new HashSet<>(mine).size()!=mine.size()

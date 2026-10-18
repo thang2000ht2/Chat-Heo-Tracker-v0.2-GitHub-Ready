@@ -43,7 +43,8 @@ final class DiagnosticLog {
         "cards","slots","seen","board","hand","counts","deltas","seat","delta",
         "count","before","after","fan_count","recognized","complete","diagnosis",
         "reason","status","confidence","fragments","missing","source","verified",
-        "epoch","mismatch","exception_type","duration_ms","frame_index"));
+        "epoch","mismatch","exception_type","duration_ms","frame_index",
+        "ocr_best","ocr_second","ocr_margin","ocr_reasons","ocr_runner_digits"));
     int exportTo(OutputStream out)throws IOException{
         synchronized(LOCK){
             int lines=0;

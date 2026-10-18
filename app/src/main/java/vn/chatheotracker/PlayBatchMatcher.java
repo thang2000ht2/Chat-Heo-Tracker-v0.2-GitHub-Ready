@@ -2,11 +2,12 @@ package vn.chatheotracker;
 
 import java.util.*;
 
-/** Match an opponent's verified counter decrease to a COMPLETE observed move.
+/** LEGACY / no longer invoked by CaptureService. Match an opponent's verified counter decrease to a COMPLETE observed move.
  * The recognizer may expose 8-9-10 first and J-Q a few frames later. Never
  * attribute the first three cards to a five-card drop or silently invent the
  * two missing cards. Pure Java so it can be tested on real capture sequences.
  */
+@Deprecated
 final class PlayBatchMatcher {
     static final class Fragment {
         final List<String> cards;
@@ -57,6 +58,7 @@ final class PlayBatchMatcher {
                     if(union.size()>d.delta)break;
                     if(union.size()==d.delta){
                         if(!union.containsAll(liveBoard))continue;
+                        if(!PlayStructure.classify(union).accepted())continue;
                         return new Match(di,chosen,union);
                     }
                 }
