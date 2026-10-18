@@ -18,6 +18,7 @@ import android.text.style.ForegroundColorSpan;
 import android.text.style.BackgroundColorSpan;
 import android.text.style.StyleSpan;
 import android.text.style.UnderlineSpan;
+import android.text.style.RelativeSizeSpan;
 import android.util.TypedValue;
 import android.view.*;
 import android.widget.*;
@@ -512,7 +513,13 @@ public final class CaptureService extends Service {
                         if(check.exact)state=handCards.size()+" lá ✓";
                         else if(check.feasible)
                             state=handCards.size()+" lá · thiếu lịch sử "+check.missing;
-                        else state=handCards.size()+" lá · chưa đối soát";
+                        else {
+                            ObservedHandReconciler.Result partial=ObservedHandReconciler.inspect(
+                                handCards,observedCards(),knownCounts);
+                            state=partial.feasible && !partial.allCountersKnown
+                                ? handCards.size()+" lá ✓ tay · thiếu đếm"
+                                : handCards.size()+" lá · chưa đối soát";
+                        }
                     }else if(myCards!=null){
                         state=myCards.complete?(myCards.cards.size()+" lá · chưa đồng bộ"):
                             (myCards.fanCount>0?"góc "+myCards.cards.size()+"/"+myCards.fanCount:
@@ -571,6 +578,7 @@ public final class CaptureService extends Service {
         else{handPending=signature;handPendingFrames=1;}
         if(handPendingFrames<3)return false;
         handCards.addAll(sorted);handEverVerified=true;
+        threatDirty=true;threatEpoch++;lastThreatScan=0;
         trainEvent("hand_verified","cards",sorted,"method","stable_three_frames",
             "confidence","verified_13","count",sorted.size());
         getSharedPreferences("tracker_strategy",MODE_PRIVATE).edit().putString("hand",signature).putString("hand_source","auto").apply();
@@ -1202,21 +1210,42 @@ public final class CaptureService extends Service {
         // Before the first verified local play, an apparent 8-12 card fan is
         // frequently a partially occluded 13-card hand. Do not promote it.
         if(handCards.isEmpty() && myPlayed.isEmpty() && scanned.size()!=13)return false;
-        // Never allow visible cards to conflict with known played cards.
-        for(String c:scanned)if(played.contains(c))return false;
-        PartialDeckState.Result deck=PartialDeckState.check(
+        // Three identical, complete visible fan scans outweigh a stale card
+        // record. A card cannot be simultaneously in our hand and played.
+        // Repair only the overlapping card identities; never fabricate others.
+        ObservedHandReconciler.Result check=ObservedHandReconciler.inspect(
             scanned,observedCards(),knownCounts);
-        if(!deck.feasible)return false;
-        // The visible hand may be valid even when a few earlier plays were
-        // missed; do not prevent recovery just because the history is partial.
-
-        // A hand successfully conserved across all 52 known cards is stronger
-        // evidence than an older manual choice; reconcile without guessing.
+        if(!check.feasible)return false;
+        LinkedHashSet<String> contradictions=new LinkedHashSet<>(check.contradictions);
+        if(!contradictions.isEmpty()){
+            trainEvent("hand_history_conflict","cards",new ArrayList<>(contradictions),
+                "reason","stable_visible_hand_overlaps_observed_history",
+                "confidence","correction_not_training_ground_truth");
+            for(String c:contradictions){
+                played.remove(c);waitingCards.remove(c);
+                myPlayed.remove(c);otherPlayed.remove(c);otherHistory.remove(c);
+                for(int seat=0;seat<3;seat++){
+                    byPlayer[seat].remove(c);playerHistory[seat].remove(c);
+                }
+            }
+            for(int i=cardMoves.size()-1;i>=0;i--){
+                cardMoves.get(i).cards.removeAll(contradictions);
+                if(cardMoves.get(i).cards.isEmpty())cardMoves.remove(i);
+            }
+            recentCards.clear();
+            threatDirty=true;threatEpoch++;
+        }
+        // The current visual hand remains usable even if a winner's counter is
+        // hidden (-1). Sampling of opponents still checks its own requirements.
+        // Visually confirmed cards can correct stale historical classification,
+        // but gaps in earlier plays remain unknown rather than invented.
         handCards.clear();handCards.addAll(scanned);
         handEverVerified=true;
         manualHandOverride=false;
+        threatDirty=true;threatEpoch++;lastThreatScan=0;
         trainEvent("hand_verified","cards",new ArrayList<>(scanned),
-            "method","visible_hand_after_play","confidence","multi_frame_verified",
+            "method","visible_hand_after_play","confidence",
+            contradictions.isEmpty()?"multi_frame_verified":"multi_frame_history_repaired",
             "count",scanned.size());
         persistCurrentHand();
         getSharedPreferences("tracker_strategy",MODE_PRIVATE).edit().putString("hand_source","auto").apply();
@@ -1534,9 +1563,17 @@ public final class CaptureService extends Service {
      */
     private CharSequence buildRemainingSpans(Collection<String> remaining,OpponentCandidatePool.Result pool){
         SpannableStringBuilder sb=new SpannableStringBuilder();
+        // The unplayed deck includes OUR cards. Dim owned cards rather than
+        // removing them: the bright remaining suits are the candidates that
+        // opponents may hold, subject to the history's reliability.
         sb.append("Chưa đánh (").append(String.valueOf(remaining.size())).append(") · ");
         int summaryStart=sb.length();
         sb.append(pool.compactCounts()).append("  ");
+        int legendStart=sb.length();
+        if(pool.reliable) {
+            sb.append("[mờ: tay tôi]  ");
+            sb.setSpan(new ForegroundColorSpan(0xff8999ad),legendStart,sb.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        }
         if(pool.reliable)sb.setSpan(new ForegroundColorSpan(0xffabd7ee),summaryStart,sb.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         else sb.setSpan(new ForegroundColorSpan(0xffffc07e),summaryStart,sb.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         HashSet<String> unplayed=new HashSet<>(remaining);
@@ -1547,7 +1584,14 @@ public final class CaptureService extends Service {
             boolean exists=false;
             for(String suit:suits)if(unplayed.contains(rank+suit)){exists=true;break;}
             if(!exists)continue;
+            int rankStart=sb.length();
             sb.append(rank);
+            boolean allMine=pool.reliable;
+            for(String suit:suits)if(unplayed.contains(rank+suit) && !pool.mine.contains(rank+suit))allMine=false;
+            if(allMine){
+                sb.setSpan(new ForegroundColorSpan(0x88b7c4d3),rankStart,sb.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                sb.setSpan(new RelativeSizeSpan(.93f),rankStart,sb.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            }
             for(String suit:suits){
                 String card=rank+suit;
                 if(!unplayed.contains(card))continue;
@@ -1556,8 +1600,9 @@ public final class CaptureService extends Service {
                 int b=sb.length();
                 OpponentCandidatePool.Cue cue=pool.cue(card);
                 if(cue==OpponentCandidatePool.Cue.MINE){
-                    // Keep my own unplayed cards visible, but neutral.
-                    sb.setSpan(new ForegroundColorSpan(0xff8390a2),a,b,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                    // Owned cards remain in "Chưa đánh", visually de-emphasized.
+                    sb.setSpan(new ForegroundColorSpan(0x88b7c4d3),a,b,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                    sb.setSpan(new RelativeSizeSpan(.92f),a,b,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
                 }else if(cue==OpponentCandidatePool.Cue.POSSIBLE_QUARTET){
                     sb.setSpan(new ForegroundColorSpan(0xffff8585),a,b,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
                     sb.setSpan(new BackgroundColorSpan(0xff49242c),a,b,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
