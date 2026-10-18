@@ -1,9 +1,9 @@
-# Build Chặt Heo Tracker v3.1 với GitHub Actions
+# Build Chặt Heo Tracker v3.4
 
-1. Giải nén ZIP. **Upload các nội dung trong thư mục gốc** (`app/`, `.github/`, `test_pure/`, `test_android_stubs/`, `test_images/`, v.v.) vào repository GitHub cũ, ghi đè file cùng tên.
-2. Vào **Actions → Build Chặt Heo Tracker APK → Run workflow**.
-3. Workflow chạy thử luật/thống kê, thử ảnh thực của HandRecognizer/CardRecognizer, sau đó build `app-debug.apk`.
-4. Tải artifact **`ChatHeoTracker-v3.1-verified-hand-atomic-play-diagnostics-apk`** và cài APK.
-5. Khi còn lỗi: **mở Tracker → Xuất log chẩn đoán lỗi quét JSONL**. Gửi `.jsonl` cùng ảnh/video và mô tả vị trí người chơi; log không lưu ảnh/nickname.
+1. Giải nén ZIP và tải **nội dung bên trong thư mục dự án** lên repository cũ.
+2. Chạy Actions → `Build Chặt Heo Tracker APK` → `Run workflow`.
+3. Mã nguồn tự kiểm tra **các test Java thuần, ảnh bộ đếm thật, ảnh bài tay/bàn, công cụ phát lại và dữ liệu JSONL** trước khi biên dịch Android.
+4. Artifact APK: `ChatHeoTracker-v3.4-counter-evidence-apk`, file `app-debug.apk`.
+5. Artifact kiểm tra phụ: `Frame-Replay-Diagnostics-v3.4` chứa CSV của bài smoke test hình ảnh (không phải đánh giá độ chính xác toàn ván).
 
-**Lưu ý:** APK debug từ repository/runner có chữ ký khác có thể không cài đè. Nếu phải gỡ bản cũ, hãy xuất dữ liệu huấn luyện trước vì dữ liệu local có thể bị mất. Chưa build/test APK trực tiếp trên HyperOS trong môi trường này.
+Đây là công việc chạy trên GitHub, không phải APK đã được biên dịch trong môi trường của mình. APK phải thử trên thiết bị thật, đặc biệt ở những vị trí có số 6/8 và lượt sáu đến tám quân.

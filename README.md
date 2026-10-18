@@ -1,20 +1,23 @@
-# Chặt Heo Tracker v3.1 — Active-Only Board Capture
+# Chặt Heo Tracker v3.4 — Counter Evidence & Scan Diagnostics
 
-Đây là mã nguồn Android offline để GitHub Actions build APK. **Không yêu cầu quyền INTERNET.**
+Mã nguồn Android offline để build APK trên GitHub Actions. Không dùng quyền INTERNET.
 
-Bản 3.1 sửa lỗi 2♥ được ghi nhầm là đã đánh: phân tách bài trắng lượt hiện tại khỏi bài xám lịch sử, chỉ ghép lượt khi lớp trắng ổn định, và tăng xác nhận bộ đếm 0 để tránh sự cố 2→0→2.
+**Ưu tiên v3.4: chất lượng bộ đếm, không phải thêm chiến thuật AI.**
 
-### Bằng chứng & kết quả kiểm thử
+- Mẫu số **6/8** lấy từ ảnh thật; từ chối nếu điểm hai ứng viên quá gần, thay vì đoán sai.
+- Bộ đếm **không được tăng trong ván**; số 13 trở lại do hệ thống xác minh chia ván mới, không tự tin vào một khung hình. Huy hiệu không thấy được được ghi là `?`, không tự tính `0`.
+- `MoveEvidenceFusion` là **đường ghi lịch sử đối thủ duy nhất**. `PlayBatchMatcher` và `SixCardLeadRecovery` còn trong repo như legacy tests, không gọi ở dịch vụ thực tế.
+- Trong màn hình chính chọn **TỰ KIỂM TRA NHẬN DIỆN → Làm mới bảng tự kiểm tra** để xem điểm của ba bộ đếm và từng lá tay.
+- Log chẩn đoán mới có `counter_ocr` (ứng viên, điểm, biên, lý do) và `counter_rejected` (chuyển số không hợp lệ).
+- Có bộ kiểm tra ảnh thật và công cụ đọc lại chuỗi ảnh/JSONL phục vụ kiểm thử liên tục.
 
-Ảnh do người dùng gửi ngày 18/10/2026 được dùng để làm bài kiểm tra *đã che danh tính*, `test_images/real_2h_active_jd_gray.png`. Bộ nhận diện trả về `active=[2H]`, trong khi bộ đọc cả lớp là `all=[JS,2H]`, chứng minh lớp cũ có thể làm nhiễu dữ liệu. `TestTwoHeartsRegression` tái tạo tình huống lịch sử `2H` nhưng bàn trắng `2C` và xác nhận không được ghép sai.
+**Kết quả trên 18 huy hiệu gắn nhãn:** 17 đúng, 1 từ chối, 0 đọc sai. Bộ mẫu còn quá nhỏ để công bố 99% chính xác; chưa test APK trên điện thoại thật. Chưa điều chỉnh AI chiến thuật.
 
-**38 kiểm thử Java và 5 bài kiểm tra ảnh theo nhóm đã chạy đạt tại môi trường phát triển; chưa biên dịch APK hoặc thử trên Xiaomi.**
+Xem `CHANGELOG_V3_4.md` và `DATA_CAN_THU_THAP_V3_4.md` để biết chi tiết, giới hạn, cách thu nhãn.
 
-### Cài qua GitHub
+## Build
+1. Giải nén ZIP, đưa **nội dung bên trong** vào gốc repository GitHub.
+2. **Actions → Build Chặt Heo Tracker APK → Run workflow**.
+3. Tải artifact `ChatHeoTracker-v3.4-counter-evidence-apk` rồi cài bằng file `app-debug.apk`.
 
-1. Giải nén ZIP, tải **nội dung** dự án lên gốc repository hiện tại.
-2. Chọn **Actions → Build Chặt Heo Tracker APK → Run workflow**.
-3. Tải artifact `ChatHeoTracker-v3.1-current-layer-heo-fix-apk` và cài bản APK.
-4. Nếu còn lỗi, xuất `chat_heo_scan_diagnostics.jsonl` trong màn hình Tracker và gửi kèm ảnh chụp đúng thời điểm.
-
-Dữ liệu tự học và gợi ý hiện tại được giữ nguyên. Bản này không tự khẳng định % chặt heo đã được hiệu chuẩn. Xem `CHANGELOG_V3_1.md` để biết rõ nguyên nhân và thay đổi.
+**Lưu ý:** Thay chữ ký APK (ví dụ build ở máy khác) có thể yêu cầu gỡ bản cũ và làm mất dữ liệu tự học trên điện thoại. Nên sao lưu dữ liệu huấn luyện trước.

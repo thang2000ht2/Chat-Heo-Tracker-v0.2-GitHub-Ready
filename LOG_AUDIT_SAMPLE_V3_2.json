@@ -1,0 +1,88 @@
+{
+  "total_events": 1178,
+  "event_counts": {
+    "capture_started": 8,
+    "hand_scan": 335,
+    "board_fragment": 223,
+    "unattributed_play": 63,
+    "opponent_count": 213,
+    "move_matched": 117,
+    "incomplete_move": 41,
+    "hand_deck_conflict": 15,
+    "hand_conflict": 7,
+    "learned_move_retracted": 13,
+    "hand_synced": 62,
+    "round_reset": 20,
+    "local_move_inferred": 23,
+    "hand_absent_after_winner": 7,
+    "redeal_evidence": 3,
+    "board_layers_filtered": 28
+  },
+  "sessions": [
+    {
+      "started_utc": "2026-10-18T09:15:02+00:00",
+      "duration_seconds": 0.2,
+      "scan_events": 1,
+      "first_complete_hand_seconds": null
+    },
+    {
+      "started_utc": "2026-10-18T09:15:10+00:00",
+      "duration_seconds": 328.0,
+      "scan_events": 122,
+      "first_complete_hand_seconds": 63.5
+    },
+    {
+      "started_utc": "2026-10-18T13:28:18+00:00",
+      "duration_seconds": 0.2,
+      "scan_events": 1,
+      "first_complete_hand_seconds": null
+    },
+    {
+      "started_utc": "2026-10-18T13:28:33+00:00",
+      "duration_seconds": 135.3,
+      "scan_events": 36,
+      "first_complete_hand_seconds": 27.5
+    },
+    {
+      "started_utc": "2026-10-18T13:38:14+00:00",
+      "duration_seconds": 526.6,
+      "scan_events": 136,
+      "first_complete_hand_seconds": 101.1
+    },
+    {
+      "started_utc": "2026-10-18T14:14:26+00:00",
+      "duration_seconds": 0.2,
+      "scan_events": 1,
+      "first_complete_hand_seconds": null
+    },
+    {
+      "started_utc": "2026-10-18T14:14:29+00:00",
+      "duration_seconds": 46.9,
+      "scan_events": 9,
+      "first_complete_hand_seconds": null
+    },
+    {
+      "started_utc": "2026-10-18T14:15:23+00:00",
+      "duration_seconds": 99.0,
+      "scan_events": 29,
+      "first_complete_hand_seconds": 0.1
+    }
+  ],
+  "six_card_drops": [
+    {
+      "when_utc": "2026-10-18T13:41:12+00:00",
+      "six_card_board_observed": true,
+      "matched": false
+    },
+    {
+      "when_utc": "2026-10-18T13:42:24+00:00",
+      "six_card_board_observed": false,
+      "matched": false
+    },
+    {
+      "when_utc": "2026-10-18T13:42:28+00:00",
+      "six_card_board_observed": false,
+      "matched": false
+    }
+  ]
+}
