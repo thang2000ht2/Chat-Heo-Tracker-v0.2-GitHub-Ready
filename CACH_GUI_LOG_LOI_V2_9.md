@@ -1,6 +1,6 @@
-# Cách gửi log khi Tracker nhận diện sai (v2.9)
+# Cách gửi log khi Tracker nhận diện sai (v3.0)
 
-1. Mở **Tracker v2.9**, chọn **Bắt đầu theo dõi** và cấp quyền ghi toàn bộ màn hình. Chơi bình thường.
+1. Mở **Tracker v3.0**, chọn **Bắt đầu theo dõi** và cấp quyền ghi toàn bộ màn hình. Chơi bình thường.
 2. Khi lỗi xuất hiện, hãy chụp màn hình hoặc quay clip ngắn, ghi lại **thời điểm** và đối thủ **Trên / Trái / Phải**.
 3. Không cần reset. Mở app Tracker, kéo xuống mục **NHẬT KÝ CHẨN ĐOÁN LỖI QUÉT**, bấm **Xuất log chẩn đoán lỗi quét JSONL** và chọn nơi lưu. Gửi tập tin `chat_heo_scan_diagnostics.jsonl` cùng ảnh/clip.
 4. Nếu đã lỡ reset, vẫn có thể xuất log: sự kiện `round_reset` ghi rõ mốc ván mới. Nếu muốn xóa log sau khi gửi, dùng nút **Xóa log chẩn đoán**; không tác động dữ liệu huấn luyện.
