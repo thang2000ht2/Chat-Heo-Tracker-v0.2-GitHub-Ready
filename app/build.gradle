@@ -6,8 +6,8 @@ android {
         applicationId 'vn.chatheotracker'
         minSdk 29
         targetSdk 35
-        versionCode 27
-        versionName '2.7-reentry-bait-dataset' 
+        versionCode 28
+        versionName '2.8-flexible-hand-corners' 
     }
     buildTypes { release { minifyEnabled false } }
     compileOptions {

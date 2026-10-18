@@ -1,0 +1,9 @@
+Chặt Heo Tracker v2.8 — offline/source validation
+- Pure-Java tests: 29 groups passed.
+- Actual HandRecognizer (Android implementation, Java desktop graphics stubs):
+  selected_five.png: 5/5 correct [4D,9H,10H,JC,KH]; raised cards.
+  spread_ten.png: 10/10 correct [4S,7D,7H,10H,JD,QS,KS,KD,KH,AD].
+- Python training/data/calibration/rules/self-play smoke: passed.
+- Java advisor + paired reference self-play smoke: completed; no algorithm release gate passed, so no claim of improvement to strategy.
+- Android APK/HyperOS device: NOT built or tested in this environment.
+- Dataset: TWO anonymized hand images, not a general accuracy benchmark.

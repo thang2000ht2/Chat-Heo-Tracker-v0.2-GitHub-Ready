@@ -12,6 +12,11 @@ public class TestHandFanGeometry {
         boolean[] noise=new boolean[1600];
         for(int i=100;i<180;i++)noise[i]=true;
         ok(HandFanGeometry.inRow(noise,300,715)==null);
+        java.util.List<Integer> raised=java.util.Arrays.asList(
+            844,844,938,938,1032,1032,1127,1127,1221,1221,1168);
+        HandFanGeometry.Fan fan=HandFanGeometry.fromWhiteEdges(raised,714);
+        ok(fan!=null && fan.count==5 && Math.abs(fan.left-844)<=3);
+        ok(HandFanGeometry.fromWhiteEdges(java.util.Arrays.asList(900,901,902),714)==null);
         System.out.println("TestHandFanGeometry OK");
     }
 }
