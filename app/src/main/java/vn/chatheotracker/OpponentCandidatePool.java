@@ -27,8 +27,8 @@ final class OpponentCandidatePool {
         }
         /** Card-specific cue so owned cards are never painted as an opponent threat. */
         Cue cue(String card) {
-            if(!reliable)return Cue.UNVERIFIED;
             if(mine.contains(card))return Cue.MINE;
+            if(!reliable)return Cue.UNVERIFIED;
             if(!possible.contains(card))return Cue.NEUTRAL;
             int rank=MonteCarloAdvisor.rank(card);
             if(rank<0)return Cue.NEUTRAL;

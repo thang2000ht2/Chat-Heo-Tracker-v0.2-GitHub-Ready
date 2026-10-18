@@ -152,6 +152,9 @@ public final class CaptureService extends Service {
     private boolean stopping=false;
     private int densityDpi;
     private TrainingDataStore trainingData;
+    private DiagnosticLog diagnostics;
+    private String lastDiagnosticHand="";
+    private long lastDiagnosticHandAt=0;
     private String roundId;
     private String lastPartialLogged="";
     private long lastPartialLoggedAt=0;
@@ -162,6 +165,9 @@ public final class CaptureService extends Service {
         if(!getSharedPreferences("tracker_training",MODE_PRIVATE).getBoolean("collect",true))return;
         trainingData.append(name,roundId,TrainingDataStore.fields(attributes));
     }
+    private void diag(String event,Object... data){
+        if(diagnostics!=null)diagnostics.event(event,roundId,data);
+    }
     private void startNewRound(String reason){
         roundId=UUID.randomUUID().toString();
         getSharedPreferences("tracker_training",MODE_PRIVATE).edit()
@@ -171,6 +177,7 @@ public final class CaptureService extends Service {
     @Override public void onCreate(){
         super.onCreate();mainHandler=new Handler(Looper.getMainLooper());
         trainingData=new TrainingDataStore(getFilesDir());
+        diagnostics=new DiagnosticLog(getFilesDir());
         // Each new screen-capture session must have its own round ID; resuming
         // the app must not silently blend observations from separate games.
         roundId=null;
@@ -316,6 +323,7 @@ public final class CaptureService extends Service {
     }
     private void startScreenCapture(int code,Intent data){
         startNewRound("capture_session_started");
+        diag("capture_started","reason","new_permission_session");
         recognizer=new CardRecognizer(this);
         // Restore explicitly edited hand only. Previous automatic scans may be stale.
         android.content.SharedPreferences pref=getSharedPreferences("tracker_strategy",MODE_PRIVATE);
@@ -436,8 +444,17 @@ public final class CaptureService extends Service {
             boolean changed,trySuggestion=false,turnBegan=false,turnEnded=false;
             synchronized(stateLock){
                 boolean occupantChanged=readSeats && handleSeatIdentities(seatNames,counts);
+                updateBoard(whiteCards);
                 changed=handleFrame(cards,counts,now) || occupantChanged;
                 if(myCards!=null){
+                    String frameSignature=myCards.fanCount+":"+myCards.cards+":"+myCards.complete+":"+myCards.diagnosis;
+                    if(!frameSignature.equals(lastDiagnosticHand) || now-lastDiagnosticHandAt>12000){
+                        diag("hand_scan","cards",myCards.cards,"slots",myCards.slots,
+                            "fan_count",myCards.fanCount,"recognized",myCards.cards.size(),
+                            "complete",myCards.complete,"diagnosis",myCards.diagnosis,
+                            "counts",knownCounts.clone(),"frame_index",scanFrameIndex);
+                        lastDiagnosticHand=frameSignature;lastDiagnosticHandAt=now;
+                    }
                     if(!myCards.complete && !myCards.cards.isEmpty()){
                         String sig=myCards.cards.size()+":"+myCards.diagnosis;
                         if(!sig.equals(lastPartialLogged)||now-lastPartialLoggedAt>10000){
@@ -449,7 +466,6 @@ public final class CaptureService extends Service {
                     if(handleHandFrame(myCards))changed=true;
                     if(updateVisibleHand(myCards))changed=true;
                 }
-                updateBoard(whiteCards);
                 if(turnNow){
                     turnFrames++;absentTurnFrames=0;
                     if(!myTurn && turnFrames>=2){
@@ -550,6 +566,7 @@ public final class CaptureService extends Service {
             });
             if(trySuggestion)runFreshAdvice();
         }catch(Exception e){
+            diag("frame_exception","exception_type",e.getClass().getSimpleName());
             android.util.Log.w("Tracker","Frame scan error",e);
             setScanStatus("lỗi khung hình");
         }
@@ -578,6 +595,7 @@ public final class CaptureService extends Service {
         else{handPending=signature;handPendingFrames=1;}
         if(handPendingFrames<3)return false;
         handCards.addAll(sorted);handEverVerified=true;
+        diag("hand_synced","cards",sorted,"reason","initial_thirteen");
         threatDirty=true;threatEpoch++;lastThreatScan=0;
         trainEvent("hand_verified","cards",sorted,"method","stable_three_frames",
             "confidence","verified_13","count",sorted.size());
@@ -626,6 +644,7 @@ public final class CaptureService extends Service {
             knownCounts[i]=count;
             if(before!=count){
                 changed=true;
+                diag("opponent_count","seat",i,"before",before,"after",count);
                 trainEvent("opponent_count","seat",i,"before",before,"after",count,
                     "confidence","stable_two_frames");
             }
@@ -660,6 +679,8 @@ public final class CaptureService extends Service {
         LinkedHashSet<String> newlySeen=recentCards.update(visible,played,waitingCards,now);
         if(!newlySeen.isEmpty()){
             waitingCards.addAll(newlySeen);
+            diag("board_fragment","cards",new ArrayList<>(newlySeen),"board",currentBoard,
+                "counts",knownCounts.clone());
             // Merge cards exposed at different instants in the same animation.
             if(!cardMoves.isEmpty() && now-cardMoves.get(cardMoves.size()-1).updated<750){
                 CardMove last=cardMoves.get(cardMoves.size()-1);
@@ -677,74 +698,80 @@ public final class CaptureService extends Service {
     }
     private boolean reconcile(long now){
         boolean changed=false;
-        // Prefer same-number-of-cards drop events within ~2 seconds of the visible play.
+        // Never assign an incomplete 8-9-10 fragment to a 5-card counter
+        // decrease. Wait for J-Q from later video frames and commit ONE move.
+        for(int iteration=0;iteration<8;iteration++){
+            ArrayList<PlayBatchMatcher.Fragment> fragments=new ArrayList<>();
+            for(CardMove move:cardMoves)
+                fragments.add(new PlayBatchMatcher.Fragment(move.cards,move.time,move.updated));
+            ArrayList<PlayBatchMatcher.Drop> drops=new ArrayList<>();
+            for(CountDrop drop:countDrops)
+                drops.add(new PlayBatchMatcher.Drop(drop.player,drop.delta,drop.time));
+            PlayBatchMatcher.Match match=PlayBatchMatcher.exact(fragments,drops,
+                currentBoard,boardStable,now);
+            if(match==null)break;
+            CountDrop drop=countDrops.remove(match.dropIndex);
+            ArrayList<String> accepted=new ArrayList<>();
+            for(String card:match.cards)if(played.add(card)){
+                byPlayer[drop.player].add(card);
+                accepted.add(card);
+            }
+            for(int k=match.fragments.size()-1;k>=0;k--)
+                cardMoves.remove((int)match.fragments.get(k));
+            waitingCards.removeAll(match.cards);
+            if(!accepted.isEmpty()){
+                playerHistory[drop.player].record(accepted);
+                BaitBehaviorSignals.Observation signal=baitSignals.record(drop.player,
+                    accepted,handEverVerified?handCards:null,knownCounts[drop.player]);
+                if(signal.possibleBaitSignal())trainEvent("bait_candidate","seat",drop.player,
+                    "cards",accepted,"signal",signal.label(),"my_heo_verified",true,
+                    "remaining_after",knownCounts[drop.player],
+                    "confidence","weak_observable_pattern_not_hidden_intent");
+                trainEvent("opponent_move","seat",drop.player,"cards",accepted,
+                    "count_decrease",drop.delta,"remaining_after",knownCounts[drop.player],
+                    "local_hand_count",handEverVerified?handCards.size():-1,
+                    "local_heo_visible",handEverVerified && hasHeo(handCards),
+                    "lead_previous_frame",new ArrayList<>(currentBoard),
+                    "lead_context_confidence","not_verified_same_turn",
+                    "opponent_counts",knownCounts.clone(),"confidence","matched_exact");
+                learning[drop.player].record(accepted);
+                persistOpponentLearning(drop.player);
+            }
+            diag("move_matched","seat",drop.player,"delta",drop.delta,
+                "fragments",match.fragments.size(),"cards",accepted,"board",currentBoard);
+            changed=true;
+        }
+        // Old code prematurely attributed 3/5 cards to a player (or to
+        // 'Khác') and subsequently misattributed the other 2/5. Keep incomplete
+        // batches uncertain instead of poisoning confirmed opponent history.
         for(int m=0;m<cardMoves.size();){
             CardMove move=cardMoves.get(m);
-            int selected=-1,bestScore=Integer.MAX_VALUE;
-            for(int d=0;d<countDrops.size();d++){
-                CountDrop drop=countDrops.get(d);
-                long lag=Math.abs(drop.time-move.time);
-                if(lag>1900)continue;
-                int score=(int)lag + Math.abs(drop.delta-move.cards.size())*300;
-                if(score<bestScore){bestScore=score;selected=d;}
+            if(now-move.updated<4800){m++;continue;}
+            boolean pendingCounter=false;
+            for(CountDrop drop:countDrops)
+                if(Math.abs(drop.time-move.time)<3000){pendingCounter=true;break;}
+            if(pendingCounter){m++;continue;}
+            ArrayList<String> accepted=new ArrayList<>();
+            for(String card:move.cards)if(played.add(card)){
+                otherPlayed.add(card);accepted.add(card);
             }
-            if(selected>=0 && (countDrops.get(selected).delta==move.cards.size()
-                    || (now-move.time>=1000 && now-move.updated>=650))){
-                CountDrop drop=countDrops.remove(selected);
-                ArrayList<String> accepted=new ArrayList<>();
-                for(String card:move.cards)if(played.add(card)){
-                    byPlayer[drop.player].add(card);
-                    accepted.add(card);
-                }
-                playerHistory[drop.player].record(accepted);
-                if(!accepted.isEmpty()){
-                    BaitBehaviorSignals.Observation signal=drop.delta==accepted.size() ?
-                        baitSignals.record(drop.player,accepted,
-                            handEverVerified?handCards:null,knownCounts[drop.player]):
-                        BaitBehaviorSignals.fromConfirmedPlay(Collections.emptyList(),null,-1);
-                    if(signal.possibleBaitSignal()){
-                        trainEvent("bait_candidate","seat",drop.player,"cards",accepted,
-                            "signal",signal.label(),"my_heo_verified",true,
-                            "remaining_after",knownCounts[drop.player],
-                            "confidence","weak_observable_pattern_not_hidden_intent");
-                    }
-                    trainEvent("opponent_move","seat",drop.player,"cards",accepted,
-                        "count_decrease",drop.delta,"remaining_after",knownCounts[drop.player],
-                        "local_hand_count",handEverVerified?handCards.size():-1,
-                        "local_heo_visible",handEverVerified && hasHeo(handCards),
-                        "lead_previous_frame",new ArrayList<>(currentBoard),
-                        "lead_context_confidence","not_verified_same_turn",
-                        "opponent_counts",knownCounts.clone(),
-                        "confidence",drop.delta==accepted.size()
-                        ?"matched_exact":"partial_card_observation");
-                    learning[drop.player].record(accepted);
-                    persistOpponentLearning(drop.player);
-                }
-                if(drop.delta>move.cards.size())missingCards[drop.player]+=drop.delta-move.cards.size();
-                waitingCards.removeAll(move.cards);
-                cardMoves.remove(m);
-                changed=true;
-            }else if(now-move.time>2600){
-                // This could be the user's own turn; without a visible count change,
-                // the app must NOT invent an opponent attribution.
-                ArrayList<String> accepted=new ArrayList<>();
-                for(String card:move.cards)if(played.add(card)){
-                    otherPlayed.add(card);
-                    accepted.add(card);
-                }
+            if(!accepted.isEmpty()){
                 otherHistory.record(accepted);
-                if(!accepted.isEmpty())trainEvent("unattributed_play","cards",accepted,
+                trainEvent("unattributed_play","cards",accepted,
                     "confidence","no_counter_match");
-                updateHandAfterPlay(accepted);
-                waitingCards.removeAll(move.cards);
-                cardMoves.remove(m);changed=true;
-            }else m++;
+                diag("unattributed_play","cards",accepted,"reason","no_matching_counter");
+            }
+            updateHandAfterPlay(accepted);
+            waitingCards.removeAll(move.cards);
+            cardMoves.remove(m);changed=true;
         }
         for(int i=0;i<countDrops.size();){
             CountDrop drop=countDrops.get(i);
-            if(now-drop.time>4000){
+            if(now-drop.time>6500){
                 trainEvent("missing_play","seat",drop.player,"count_decrease",drop.delta,
                     "confidence","unreadable_cards");
+                diag("incomplete_move","seat",drop.player,"delta",drop.delta,
+                    "reason","card_count_not_matched");
                 missingCards[drop.player]+=drop.delta;
                 countDrops.remove(i);changed=true;
             }else i++;
@@ -833,11 +860,13 @@ public final class CaptureService extends Service {
     private void resetRoundInternal(String reason){
         if(roundId!=null){
             trainEvent("round_end","result","unknown","reason",reason);
+        diag("round_reset","reason",reason);
             getSharedPreferences("tracker_training",MODE_PRIVATE).edit()
                 .putString("last_round_id",roundId).apply();
         }
         startNewRound(reason);
         lastPartialLogged="";lastPartialLoggedAt=0;
+        lastDiagnosticHand="";lastDiagnosticHandAt=0;
         for(int i=0;i<3;i++){
             learning[i].newRound();
             persistOpponentLearning(i);
@@ -969,7 +998,8 @@ public final class CaptureService extends Service {
         synchronized(stateLock){
             mine=new LinkedHashSet<>(handCards);
             seen=observedCards();counts=knownCounts.clone();
-            handTrusted=handEverVerified && !mine.isEmpty() && Collections.disjoint(mine,seen);
+            handTrusted=handEverVerified && !mine.isEmpty() && Collections.disjoint(mine,seen)
+                && ObservedHandReconciler.inspect(mine,seen,counts).feasible;
             for(LearnedOpponentHistory h:learning)history.add(h.snapshot());
             for(List<ObservedPass> events:confirmedPasses)passHistory.add(new ArrayList<>(events));
             version=++threatEpoch;
@@ -1196,6 +1226,7 @@ public final class CaptureService extends Service {
      * The previous full 13-card scan remains the default way to initialize a deal.
      */
     private boolean updateVisibleHand(HandRecognizer.Result r){
+        if(manualHandOverride)return false;
         if(!r.complete || r.cards.isEmpty()){
             visualHandTrusted=false;visualFrames=0;visualCandidate="";return false;
         }
@@ -1209,14 +1240,26 @@ public final class CaptureService extends Service {
         if(scanned.equals(handCards))return false;
         // Before the first verified local play, an apparent 8-12 card fan is
         // frequently a partially occluded 13-card hand. Do not promote it.
-        if(handCards.isEmpty() && myPlayed.isEmpty() && scanned.size()!=13)return false;
+        if(handCards.isEmpty() && !HandSyncPolicy.acceptFirstVisualHand(scanned.size(),
+            sawAnyLowerCounter || !played.isEmpty() || !myPlayed.isEmpty() || !cardMoves.isEmpty(),
+            knownCounts))return false;
         // Three identical, complete visible fan scans outweigh a stale card
         // record. A card cannot be simultaneously in our hand and played.
         // Repair only the overlapping card identities; never fabricate others.
         ObservedHandReconciler.Result check=ObservedHandReconciler.inspect(
             scanned,observedCards(),knownCounts);
-        if(!check.feasible)return false;
+        if(!check.feasible){
+            // A repeatedly verified visible hand has more direct evidence than
+            // stale PUBLIC card classification. Keep showing it but suppress
+            // opponent-threat percentages and advice until the deck reconciles.
+            // The diagnostic log records this as NOT safe training ground truth.
+            diag("hand_deck_conflict","cards",new ArrayList<>(scanned),
+                "counts",knownCounts.clone(),"seen",new ArrayList<>(observedCards()),
+                "reason","public_history_overcounts_deck");
+        }
         LinkedHashSet<String> contradictions=new LinkedHashSet<>(check.contradictions);
+        if(!contradictions.isEmpty())diag("hand_conflict","cards",new ArrayList<>(contradictions),
+            "hand",new ArrayList<>(scanned),"counts",knownCounts.clone());
         if(!contradictions.isEmpty()){
             trainEvent("hand_history_conflict","cards",new ArrayList<>(contradictions),
                 "reason","stable_visible_hand_overlaps_observed_history",
@@ -1226,6 +1269,10 @@ public final class CaptureService extends Service {
                 myPlayed.remove(c);otherPlayed.remove(c);otherHistory.remove(c);
                 for(int seat=0;seat<3;seat++){
                     byPlayer[seat].remove(c);playerHistory[seat].remove(c);
+                    if(learning[seat].retractCurrentRound(Collections.singleton(c))>0){
+                        diag("learned_move_retracted","seat",seat,"cards",Collections.singletonList(c));
+                        persistOpponentLearning(seat);
+                    }
                 }
             }
             for(int i=cardMoves.size()-1;i>=0;i--){
@@ -1241,11 +1288,15 @@ public final class CaptureService extends Service {
         // but gaps in earlier plays remain unknown rather than invented.
         handCards.clear();handCards.addAll(scanned);
         handEverVerified=true;
+        diag("hand_synced","cards",new ArrayList<>(scanned),"counts",knownCounts.clone(),
+            "reason",!check.feasible?"stable_visual_conflicting_ledger":
+                contradictions.isEmpty()?"stable_visual":"visual_corrected_history");
         manualHandOverride=false;
         threatDirty=true;threatEpoch++;lastThreatScan=0;
-        trainEvent("hand_verified","cards",new ArrayList<>(scanned),
-            "method","visible_hand_after_play","confidence",
-            contradictions.isEmpty()?"multi_frame_verified":"multi_frame_history_repaired",
+        trainEvent(check.feasible?"hand_verified":"hand_conflict_pending",
+            "cards",new ArrayList<>(scanned),"method","visible_hand_after_play",
+            "confidence",!check.feasible?"requires_ledger_review":
+                contradictions.isEmpty()?"multi_frame_verified":"multi_frame_history_repaired",
             "count",scanned.size());
         persistCurrentHand();
         getSharedPreferences("tracker_strategy",MODE_PRIVATE).edit().putString("hand_source","auto").apply();
@@ -1523,8 +1574,10 @@ public final class CaptureService extends Service {
             List<String> remaining=remainingCards();
             // Every red/green suit must be outside my VERIFIED hand and not public.
             // "Chưa đánh" itself still includes my own cards, by definition.
+            boolean cleanVisualHand=handEverVerified && !handCards.isEmpty() &&
+                ObservedHandReconciler.inspect(handCards,observedCards(),knownCounts).feasible;
             OpponentCandidatePool.Result pool=OpponentCandidatePool.analyze(
-                remaining,handCards,handEverVerified,knownCounts);
+                remaining,handCards,cleanVisualHand,knownCounts);
             remainingRow.setText(buildRemainingSpans(remaining,pool));
             // No scanner diagnostic row here: it crowds the fan and obscures play.
         }
@@ -1570,7 +1623,7 @@ public final class CaptureService extends Service {
         int summaryStart=sb.length();
         sb.append(pool.compactCounts()).append("  ");
         int legendStart=sb.length();
-        if(pool.reliable) {
+        if(!pool.mine.isEmpty()) {
             sb.append("[mờ: tay tôi]  ");
             sb.setSpan(new ForegroundColorSpan(0xff8999ad),legendStart,sb.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         }
@@ -1586,7 +1639,7 @@ public final class CaptureService extends Service {
             if(!exists)continue;
             int rankStart=sb.length();
             sb.append(rank);
-            boolean allMine=pool.reliable;
+            boolean allMine=true;
             for(String suit:suits)if(unplayed.contains(rank+suit) && !pool.mine.contains(rank+suit))allMine=false;
             if(allMine){
                 sb.setSpan(new ForegroundColorSpan(0x88b7c4d3),rankStart,sb.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
@@ -1642,7 +1695,7 @@ public final class CaptureService extends Service {
         Set<String> alreadySeen=observedCards();
         for(String r:ranks)for(String s:suits){
             String c=r+s;
-            if(!alreadySeen.contains(c))remain.add(c);
+            if(!alreadySeen.contains(c) || (handEverVerified && handCards.contains(c)))remain.add(c);
         }
         return remain;
     }

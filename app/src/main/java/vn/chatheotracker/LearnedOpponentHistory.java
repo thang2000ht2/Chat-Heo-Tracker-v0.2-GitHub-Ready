@@ -26,6 +26,25 @@ final class LearnedOpponentHistory {
             while (moves.size() > LIMIT) moves.removeFirst();
         }
     }
+    /** Retract misrecognized card identities only from THIS round's samples.
+     * Keep legitimate identically-named cards from previous deals intact.
+     * This is invoked only after a repeatedly verified visual-hand contradiction.
+     */
+    int retractCurrentRound(Collection<String> disputed){
+        if(disputed==null||disputed.isEmpty())return 0;
+        HashSet<String> invalid=new HashSet<>(disputed);
+        int changed=0;
+        Iterator<List<String>> it=moves.descendingIterator();
+        while(it.hasNext()){
+            List<String> play=it.next();
+            if(play.isEmpty())break; // End of current round.
+            if(play.removeAll(invalid)){
+                changed++;
+                if(play.isEmpty())it.remove();
+            }
+        }
+        return changed;
+    }
     void clear() { moves.clear(); }
     int size() { return moves.size(); }
     List<List<String>> snapshot() {

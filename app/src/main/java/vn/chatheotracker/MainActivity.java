@@ -24,6 +24,7 @@ import android.text.InputType;
 public final class MainActivity extends Activity {
     private static final int REQUEST_CAPTURE = 101;
     private static final int REQUEST_EXPORT = 102;
+    private static final int REQUEST_DIAGNOSTICS_EXPORT = 103;
     private TextView state;
     @Override public void onCreate(Bundle saved) {
         super.onCreate(saved);
@@ -31,7 +32,7 @@ public final class MainActivity extends Activity {
         root.setPadding(36, 64, 36, 20); root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(Color.rgb(20,22,29));
         TextView title = text("CHẶT HEO TRACKER",24,Color.WHITE); root.addView(title);
-        root.addView(text("v2.5 • 3ĐT / 4ĐT / TQ theo đối thủ • AI offline (ước lượng mẫu)",15,0xffd0d0d0));
+        root.addView(text("v2.9 • sửa đồng bộ bài / ghép nguyên lượt / nhật ký chẩn đoán",15,0xffd0d0d0));
         state=text("Chưa theo dõi",16,0xffa5e8a3);root.addView(state);
         Button overlay = button("1. Cho phép cửa sổ nổi", () -> {
             Intent i = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
@@ -186,6 +187,25 @@ public final class MainActivity extends Activity {
                 LinearLayout.LayoutParams.WRAP_CONTENT,1));
         }
         root.addView(placements);
+        root.addView(text("NHẬT KÝ CHẨN ĐOÁN LỖI QUÉT",17,Color.WHITE));
+        root.addView(text("Log tự lưu OFFLINE, không lưu ảnh màn hình, nickname hay tên người chơi. Ghi nhận kết quả quét, bộ đếm, các mảnh lượt đánh, cách ghép người đánh và những xung đột bài tay. Khi gặp lỗi, xuất log ngay sau ván rồi gửi cùng ảnh để kiểm tra. Lưu tối đa khoảng 3 MB, không liên quan tùy chọn huấn luyện AI.",13,0xffbac4d2));
+        root.addView(text("Dung lượng log lỗi: "+(new DiagnosticLog(getFilesDir()).bytes()/1024)+" KB",13,0xffa5e8a3));
+        root.addView(button("Xuất log chẩn đoán lỗi quét JSONL",()->{
+            Intent save=new Intent(Intent.ACTION_CREATE_DOCUMENT);
+            save.addCategory(Intent.CATEGORY_OPENABLE);
+            save.setType("application/x-ndjson");
+            save.putExtra(Intent.EXTRA_TITLE,"chat_heo_scan_diagnostics.jsonl");
+            startActivityForResult(save,REQUEST_DIAGNOSTICS_EXPORT);
+        }));
+        root.addView(button("Xóa log chẩn đoán (không xóa dữ liệu huấn luyện)",()->{
+            new android.app.AlertDialog.Builder(this).setTitle("Xóa log lỗi quét?")
+                .setMessage("Chỉ xóa nhật ký chẩn đoán, không xóa lịch sử học của đối thủ.")
+                .setNegativeButton("Hủy",null)
+                .setPositiveButton("Xóa",(d,w)->{
+                    new DiagnosticLog(getFilesDir()).clear();
+                    state.setText("Đã xóa nhật ký lỗi quét.");
+                }).show();
+        }));
         root.addView(text("Dung lượng nhật ký: "+(new TrainingDataStore(getFilesDir()).bytes()/1024)+" KB; lưu tối đa hai tệp khoảng 8 MB.",13,0xffa5e8a3));
         root.addView(button("Xuất dữ liệu huấn luyện JSONL",()->{
             Intent save=new Intent(Intent.ACTION_CREATE_DOCUMENT);
@@ -222,6 +242,16 @@ public final class MainActivity extends Activity {
     }
     @Override protected void onActivityResult(int request,int result,Intent data) {
         super.onActivityResult(request,result,data);
+        if(request==REQUEST_DIAGNOSTICS_EXPORT){
+            if(result==RESULT_OK && data!=null && data.getData()!=null){
+                try(java.io.OutputStream output=getContentResolver().openOutputStream(data.getData())){
+                    if(output==null)throw new java.io.IOException("No output stream");
+                    int lines=new DiagnosticLog(getFilesDir()).exportTo(output);
+                    state.setText("Đã xuất "+lines+" dòng log chẩn đoán.");
+                }catch(Exception e){state.setText("Lỗi xuất log: "+e.getClass().getSimpleName());}
+            }
+            return;
+        }
         if(request==REQUEST_EXPORT){
             if(result==RESULT_OK && data!=null && data.getData()!=null){
                 try(java.io.OutputStream output=getContentResolver().openOutputStream(data.getData())){
