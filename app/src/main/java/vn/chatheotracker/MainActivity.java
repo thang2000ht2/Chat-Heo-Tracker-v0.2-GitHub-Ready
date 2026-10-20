@@ -32,7 +32,7 @@ public final class MainActivity extends Activity {
         root.setPadding(36, 64, 36, 20); root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(Color.rgb(20,22,29));
         TextView title = text("CHẶT HEO TRACKER",24,Color.WHITE); root.addView(title);
-        root.addView(text("v3.4 • lọc bộ đếm mơ hồ / ghép bằng chứng thống nhất",15,0xffd0d0d0));
+        root.addView(text("v3.5 • không chốt bài tay thiếu chứng cứ",15,0xffd0d0d0));
         state=text("Chưa theo dõi",16,0xffa5e8a3);root.addView(state);
         Button overlay = button("1. Cho phép cửa sổ nổi", () -> {
             Intent i = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,

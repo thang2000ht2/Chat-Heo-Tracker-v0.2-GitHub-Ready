@@ -130,6 +130,10 @@ public final class CaptureService extends Service {
     private boolean visualHandTrusted=false;
     private String visualCandidate="";
     private int visualFrames=0;
+    // A complete-looking OCR fan is not enough to commit an unverified shrink.
+    private boolean handTransitionPending=false;
+    private String lastHandTransitionSignature="";
+    private long lastHandTransitionLogAt=0;
 
 
     private final Object stateLock=new Object();
@@ -279,6 +283,7 @@ public final class CaptureService extends Service {
                 synchronized(stateLock){
                     handCards.clear();handCards.addAll(candidate.cards);
                     manualHandOverride=true;handEverVerified=true;
+                    handTransitionPending=false;lastHandTransitionSignature="";
                     handPending="";handPendingFrames=0;
                     visualHandTrusted=false;visualFrames=0;
                     persistCurrentHand();
@@ -544,6 +549,19 @@ public final class CaptureService extends Service {
                 // When the evidence is incomplete or attribution is ambiguous,
                 // abstain rather than invent unseen cards.
                 if(recoverVerifiedEvidenceMove(whiteCards,now))changed=true;
+                // As soon as a white-layer card is temporally confirmed in
+                // public, flag a collision with an older local hand. NEVER
+                // wait for a counter or silently call it a local play.
+                if(handEverVerified && !handTransitionPending){
+                    List<String> collisions=VerifiedHandTransition.publicHandOverlap(
+                        handCards,observedCards());
+                    if(!collisions.isEmpty()){
+                        handTransitionPending=true;threatDirty=true;threatEpoch++;changed=true;
+                        diag("public_hand_conflict_pending","cards",collisions,
+                            "reason","public_and_verified_hand_overlap",
+                            "confidence","not_committed_not_training");
+                    }
+                }
                 logPendingMoveHypotheses(whiteCards,now);
                 // Seven full-count frames may be a new deal. Until the
                 // detector decides, keep the old hand/ledger immutable.
@@ -657,7 +675,8 @@ public final class CaptureService extends Service {
                     else if(!handCards.isEmpty()){
                         PartialDeckState.Result check=PartialDeckState.check(
                             handCards,observedCards(),knownCounts);
-                        if(check.exact)state=handCards.size()+" lá ✓";
+                        if(handTransitionPending)state=handCards.size()+" lá cũ · chờ khớp";
+                        else if(check.exact)state=handCards.size()+" lá ✓";
                         else if(check.feasible)
                             state=handCards.size()+" lá · thiếu lịch sử "+check.missing;
                         else {
@@ -726,33 +745,13 @@ public final class CaptureService extends Service {
         else{handPending=signature;handPendingFrames=1;}
         if(handPendingFrames<3)return false;
         handCards.addAll(sorted);handEverVerified=true;
+        handTransitionPending=false;
         diag("hand_synced","cards",sorted,"reason","initial_thirteen");
         threatDirty=true;threatEpoch++;lastThreatScan=0;
         trainEvent("hand_verified","cards",sorted,"method","stable_three_frames",
             "confidence","verified_13","count",sorted.size());
         getSharedPreferences("tracker_strategy",MODE_PRIVATE).edit().putString("hand",signature).putString("hand_source","auto").apply();
         return true;
-    }
-    private void updateHandAfterPlay(Collection<String> cards){
-        if(handCards.isEmpty())return;
-        ArrayList<String> confirmedOverlap=new ArrayList<>();
-        for(String c:cards){
-            if(handCards.remove(c)){
-                myPlayed.add(c);
-                otherPlayed.remove(c);otherHistory.remove(c);
-                confirmedOverlap.add(c);
-            }
-        }
-        if(!confirmedOverlap.isEmpty()){
-            // Record only the overlap actually removed from OUR verified hand;
-            // the surrounding board may include other players' plays.
-            trainEvent("hand_cards_removed","cards",confirmedOverlap,
-                "confidence","observed_board_overlap");
-            trainEvent("local_play_observed","cards",confirmedOverlap,
-                "played_two",hasHeo(confirmedOverlap),
-                "confidence","fan_and_board_overlap_not_button_proof");
-            persistCurrentHand();
-        }
     }
     private void persistCurrentHand(){
         // Keep an empty value at the end of a hand. Never regenerate cards after they are spent.
@@ -862,7 +861,18 @@ public final class CaptureService extends Service {
                     "confidence","no_counter_match");
                 diag("unattributed_play","cards",accepted,"reason","no_matching_counter");
             }
-            updateHandAfterPlay(accepted);
+            // Unattributed table evidence does NOT prove a LOCAL move.
+            // Do not delete overlapping hand cards or train a local play
+            // solely because opponents' counters have become unreadable.
+            ArrayList<String> overlaps=new ArrayList<>(accepted);
+            overlaps.retainAll(handCards);
+            if(!overlaps.isEmpty()){
+                handTransitionPending=true;
+                threatDirty=true;threatEpoch++;
+                diag("public_hand_conflict_pending","cards",overlaps,
+                    "reason","observed_public_but_local_shrink_not_verified",
+                    "confidence","unresolved_not_training");
+            }
             waitingCards.removeAll(move.cards);
             cardMoves.remove(m);changed=true;
         }
@@ -1055,7 +1065,8 @@ public final class CaptureService extends Service {
         }
         played.clear();otherPlayed.clear();waitingCards.clear();cardMoves.clear();countDrops.clear();
         handCards.clear();myPlayed.clear();handPending="";handPendingFrames=0;
-        handEverVerified=false;
+        handEverVerified=false;handTransitionPending=false;
+        lastHandTransitionSignature="";lastHandTransitionLogAt=0;
         fusedHand.clear();
         manualHandOverride=false;
         suggestRequested=false;suggestionScanFrames=0;
@@ -1182,7 +1193,7 @@ public final class CaptureService extends Service {
         synchronized(stateLock){
             mine=new LinkedHashSet<>(handCards);
             seen=observedCards();counts=knownCounts.clone();
-            handTrusted=handEverVerified && !mine.isEmpty() && Collections.disjoint(mine,seen)
+            handTrusted=handEverVerified && !handTransitionPending && !mine.isEmpty() && Collections.disjoint(mine,seen)
                 && ObservedHandReconciler.inspect(mine,seen,counts).feasible;
             for(LearnedOpponentHistory h:learning)history.add(h.snapshot());
             for(List<ObservedPass> events:confirmedPasses)passHistory.add(new ArrayList<>(events));
@@ -1421,7 +1432,42 @@ public final class CaptureService extends Service {
         if(visualFrames<3)return false;
         visualHandTrusted=true;lastVisualHandSize=cards.size();
         LinkedHashSet<String> scanned=new LinkedHashSet<>(cards);
-        if(scanned.equals(handCards))return false;
+        if(scanned.equals(handCards)){
+            // A stable reappearance of the original verified hand clears a
+            // temporary false partial fan, but not a public-card collision.
+            if(handTransitionPending && Collections.disjoint(scanned,observedCards())){
+                handTransitionPending=false;threatEpoch++;
+                diag("hand_transition_recovered","cards",new ArrayList<>(scanned),
+                    "reason","original_fan_visible_again");
+                threatDirty=true;
+            }
+            return false;
+        }
+        if(!handCards.isEmpty()){
+            VerifiedHandTransition.Result transition=VerifiedHandTransition.assess(
+                handCards,scanned,observedCards());
+            if(!transition.confirmed()){
+                // Never let a stable-but-partial 1-card OCR observation replace
+                // a verified 4-card hand without seeing the other three cards
+                // on the board. Store this as uncertainty, NOT training data.
+                if(transition.status==VerifiedHandTransition.Status.WAIT_PUBLIC_CARDS ||
+                    transition.status==VerifiedHandTransition.Status.REJECT_PUBLIC_OVERLAP){
+                    if(!handTransitionPending){handTransitionPending=true;threatDirty=true;threatEpoch++;}
+                }
+                long at=SystemClock.elapsedRealtime();
+                String signature=transition.status+"|"+scanned+"|"+transition.missingPublicEvidence;
+                if(!signature.equals(lastHandTransitionSignature) || at-lastHandTransitionLogAt>10000){
+                    diag("hand_transition_deferred","previous",new ArrayList<>(handCards),
+                        "scanned",new ArrayList<>(scanned),
+                        "removed_candidate",transition.removed,
+                        "missing_on_board",transition.missingPublicEvidence,
+                        "reason",transition.status.name().toLowerCase(Locale.ROOT),
+                        "confidence","not_committed_not_training");
+                    lastHandTransitionSignature=signature;lastHandTransitionLogAt=at;
+                }
+                return false;
+            }
+        }
         // Before the first verified local play, an apparent 8-12 card fan is
         // frequently a partially occluded 13-card hand. Do not promote it.
         if(handCards.isEmpty() && !HandSyncPolicy.acceptFirstVisualHand(scanned.size(),
@@ -1499,6 +1545,8 @@ public final class CaptureService extends Service {
         // but gaps in earlier plays remain unknown rather than invented.
         handCards.clear();handCards.addAll(scanned);
         handEverVerified=true;
+        handTransitionPending=false;
+        lastHandTransitionSignature="";
         diag("hand_synced","cards",new ArrayList<>(scanned),"counts",knownCounts.clone(),
             "reason",!check.feasible?"stable_visual_conflicting_ledger":
                 contradictions.isEmpty()?"stable_visual":"visual_corrected_history");
@@ -1529,7 +1577,7 @@ public final class CaptureService extends Service {
     }
     /** Stable current inputs for automatic *recovery* after a blocked advice. */
     private String adviceFingerprint(){
-        return boardStable+"|"+handEverVerified+"|"+handCards.hashCode()+"|"+
+        return boardStable+"|"+handEverVerified+"|"+handTransitionPending+"|"+handCards.hashCode()+"|"+
             observedCards().hashCode()+"|"+currentBoard.hashCode()+"|"+
             Arrays.toString(knownCounts);
     }
@@ -1560,7 +1608,7 @@ public final class CaptureService extends Service {
             countsKnown=allCountersKnown;
             // An old partial screenshot should not invalidate a hand already
             // verified earlier this round. Never trust unverified/guessed cards.
-            handOK=!hand.isEmpty() && handEverVerified;
+            handOK=!hand.isEmpty() && handEverVerified && !handTransitionPending;
             overlap=!Collections.disjoint(hand,seen) || !Collections.disjoint(hand,lead);
             epoch=turnEpoch;
             request=++adviceRequestId;
@@ -1768,7 +1816,8 @@ public final class CaptureService extends Service {
             else{
                 handRow.setVisibility(View.VISIBLE);
                 // Compact grouped rank display: 6♠♥ instead of 6♠ 6♥.
-                StringBuilder mine=new StringBuilder("Tôi (").append(handCards.size()).append("): ");
+                StringBuilder mine=new StringBuilder(handTransitionPending?"Tôi (bài cũ ":"Tôi (")
+                    .append(handCards.size()).append(handTransitionPending?" · chờ khớp): ":"): ");
                 String[] suits={"S","C","D","H"};
                 for(String rank:CardWarnings.RANKS){
                     StringBuilder group=new StringBuilder(rank);
@@ -1788,7 +1837,7 @@ public final class CaptureService extends Service {
             List<String> remaining=remainingCards();
             // Every red/green suit must be outside my VERIFIED hand and not public.
             // "Chưa đánh" itself still includes my own cards, by definition.
-            boolean cleanVisualHand=handEverVerified && !handCards.isEmpty() &&
+            boolean cleanVisualHand=handEverVerified && !handTransitionPending && !handCards.isEmpty() &&
                 ObservedHandReconciler.inspect(handCards,observedCards(),knownCounts).feasible;
             OpponentCandidatePool.Result pool=OpponentCandidatePool.analyze(
                 remaining,handCards,cleanVisualHand,knownCounts);
@@ -1911,7 +1960,10 @@ public final class CaptureService extends Service {
         Set<String> alreadySeen=observedCards();
         for(String r:ranks)for(String s:suits){
             String c=r+s;
-            if(!alreadySeen.contains(c) || (handEverVerified && handCards.contains(c)))remain.add(c);
+            // "Chưa đánh" refers to the 52-card public ledger. A card on the
+            // confirmed board must never reappear in this list just because a
+            // stale fan OCR still claims ownership of it.
+            if(!alreadySeen.contains(c))remain.add(c);
         }
         return remain;
     }
