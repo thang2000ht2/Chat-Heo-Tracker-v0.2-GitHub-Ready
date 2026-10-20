@@ -28,7 +28,9 @@ final class OpponentCandidatePool {
         /** Card-specific cue so owned cards are never painted as an opponent threat. */
         Cue cue(String card) {
             if(mine.contains(card))return Cue.MINE;
-            if(!reliable)return Cue.UNVERIFIED;
+            // Preserve provisional red/green structural cues during hand scans.
+            // Reliability controls the *label*, not whether a possible pattern
+            // is visible. A provisional cue is never a confirmed opponent hand.
             if(!possible.contains(card))return Cue.NEUTRAL;
             int rank=MonteCarloAdvisor.rank(card);
             if(rank<0)return Cue.NEUTRAL;
@@ -38,11 +40,13 @@ final class OpponentCandidatePool {
             return Cue.NEUTRAL;
         }
         String compactCounts() {
-            if(!reliable)return "cần xác nhận bài tay";
             // Counts are structural possibilities in the shared pool, NOT the
             // number of combinations in any one opponent's actual hand.
-            return "ngoài tay " + possible.size() + " · TQ:" + quartets.size()
+            // Even while scanning, display possible patterns with a clear
+            // provisional label instead of hiding all color-coded cues.
+            String counts="ngoài tay " + possible.size() + " · TQ:" + quartets.size()
                 + " 3ĐT:" + threePairs.size() + " 4ĐT:" + fourPairs.size();
+            return reliable ? counts : "dự kiến? · " + counts;
         }
     }
 
@@ -56,17 +60,24 @@ final class OpponentCandidatePool {
     static Result analyze(Collection<String> unplayed, Collection<String> confirmedHand,
                           boolean handVerified,int[] opponentCounts) {
         Set<String> left=new HashSet<>(),mine=new HashSet<>();
-        boolean valid=unplayed!=null && confirmedHand!=null && handVerified && !confirmedHand.isEmpty();
+        // Keep structural *possibilities* visible even when the visual hand is
+        // still being scanned / reconciled. Do not turn these into confirmed
+        // probabilities or training labels. Reject malformed unplayed decks.
+        boolean validDeck=unplayed!=null;
         if(unplayed!=null)for(String c:unplayed){
-            if(!RecentMoves.isCard(c) || !left.add(c))valid=false;
+            if(!RecentMoves.isCard(c) || !left.add(c))validDeck=false;
         }
+        boolean validHand=confirmedHand!=null && !confirmedHand.isEmpty();
         if(confirmedHand!=null)for(String c:confirmedHand){
-            if(!RecentMoves.isCard(c) || !mine.add(c))valid=false;
+            if(!RecentMoves.isCard(c) || !mine.add(c))validHand=false;
         }
-        if(!left.containsAll(mine))valid=false;
-        if(!valid)return new Result(false,new HashSet<>(),mine,
+        boolean handInUnplayed=left.containsAll(mine);
+        boolean reliable=validDeck && validHand && handVerified && handInUnplayed;
+        if(!validDeck)return new Result(false,new HashSet<>(),mine,
             CardWarnings.analyze(Collections.emptyList()),
             new ArrayList<>(),new ArrayList<>(),new ArrayList<>());
+        // A stale hand card already on the public table stays excluded from
+        // remaining; every other held card is dimmed and removed from threats.
         left.removeAll(mine);
         CardWarnings.Result warnings=CardWarnings.analyze(left);
         int maxCards=13;
@@ -92,7 +103,7 @@ final class OpponentCandidatePool {
         }
         // Cues derive from the feasible combinations above, never from raw
         // rank multiplicity when the relevant opponent hand is too short.
-        return new Result(true,left,mine,warnings,quartets,three,four);
+        return new Result(reliable,left,mine,warnings,quartets,three,four);
     }
     private static boolean hasPairs(CardWarnings.Result result,int start,int n){
         for(int j=0;j<n;j++)if(result.remainingByRank[start+j]<2)return false;

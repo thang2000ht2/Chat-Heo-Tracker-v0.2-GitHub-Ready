@@ -13,7 +13,13 @@ public final class TestOpponentCandidatePool {
         OpponentCandidatePool.Result unknown=OpponentCandidatePool.analyze(full,Arrays.asList("8S"),false);
         ok(!unknown.reliable,"Unverified hand must not create confident warnings");
         ok(unknown.cue("8S")==OpponentCandidatePool.Cue.MINE,"Even when deck mismatch prevents warnings, a visually verified held card must stay dim");
-        ok(unknown.quartets.isEmpty(),"Unverified hand produces no candidate sets");
+        ok(!unknown.quartets.isEmpty(),"Provisional quartet highlights stay visible during scanning");
+        ok(unknown.cue("9C")==OpponentCandidatePool.Cue.POSSIBLE_QUARTET,
+            "Unverified hand still highlights structurally possible quartets");
+        ok(unknown.compactCounts().startsWith("dự kiến?"),
+            "Provisional colors are clearly labeled as unconfirmed");
+        ok(!unknown.quartets.contains("8"),
+            "A recognized held eight excludes quartet 8 even during scanning");
         OpponentCandidatePool.Result one=OpponentCandidatePool.analyze(full,Arrays.asList("8S"),true);
         ok(one.reliable,"Verified hand");
         ok(!one.possible.contains("8S") && one.possible.size()==51,"Subtract my 8S");
@@ -31,6 +37,14 @@ public final class TestOpponentCandidatePool {
         OpponentCandidatePool.Result late7=OpponentCandidatePool.analyze(full,Arrays.asList("8S"),true,new int[]{7,7,6});
         ok(!late7.threePairs.isEmpty() && late7.fourPairs.isEmpty(),
             "7-card seats can hold 3 pairs, never 4 pairs");
+        OpponentCandidatePool.Result pendingLate=OpponentCandidatePool.analyze(full,
+            Arrays.asList("8S"),false,new int[]{5,4,5});
+        ok(pendingLate.cue("9C")==OpponentCandidatePool.Cue.POSSIBLE_QUARTET,
+            "Pending scan still shows possible quartet color");
+        ok(pendingLate.threePairs.isEmpty() && pendingLate.fourPairs.isEmpty(),
+            "Pending scan cannot invent 6/8-card combinations in five-card hands");
+        ok(pendingLate.cue("8S")==OpponentCandidatePool.Cue.MINE,
+            "Recognized own card still stays dim in provisional mode");
         ok(one.quartets.contains("9"),"Do not eliminate other ranks");
         ok(one.warnings.remainingByRank[5]==3,"Only 3 eights remain for opponents");
         List<String> publicCards=Arrays.asList("9S","9D","4H");
@@ -48,9 +62,14 @@ public final class TestOpponentCandidatePool {
         OpponentCandidatePool.Result all=OpponentCandidatePool.analyze(paired,Collections.singleton("2S"),true);
         ok(!all.reliable,"A verified hand that is not in the unplayed pool is stale");
         OpponentCandidatePool.Result none=OpponentCandidatePool.analyze(full,Collections.emptyList(),true);
-        ok(!none.reliable,"Unknown local hand must not show warning colors");
+        ok(!none.reliable,"Unknown local hand must not be marked reliable");
+        ok(none.cue("9C")==OpponentCandidatePool.Cue.POSSIBLE_QUARTET,
+            "Unknown hand: visible tentative colors, not silently hidden");
         OpponentCandidatePool.Result mismatch=OpponentCandidatePool.analyze(remain,Arrays.asList("9S"),true);
         ok(!mismatch.reliable,"A public card cannot also be in my verified hand");
+        ok(mismatch.cue("3S")==OpponentCandidatePool.Cue.POSSIBLE_QUARTET,
+            "A historical conflict should not hide all otherwise possible colors");
+        ok(mismatch.compactCounts().contains("dự kiến?"),"Conflicting history is labeled tentative");
 
         // Holding 3 suits at four spaced ranks blocks every 3/4-pair run.
         List<String> ours=Arrays.asList("3S","3C","3D","6S","6C","6D", "9S","9C","9D","QS","QC","QD","2S");
